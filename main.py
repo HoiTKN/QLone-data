@@ -105,10 +105,24 @@ def upload_to_google_sheets(df, credentials_path, sheet_url):
 
 def main():
     try:
-        # Setup Chrome
-        chrome_options = setup_chrome_options()
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=chrome_options)
+        print("Starting the script...")
+        # Setup Chrome with retry mechanism
+        max_retries = 3
+        retry_count = 0
+        
+        while retry_count < max_retries:
+            try:
+                print(f"Attempt {retry_count + 1} to initialize Chrome...")
+                chrome_options = setup_chrome_options()
+                service = Service(ChromeDriverManager().install())
+                driver = webdriver.Chrome(service=service, options=chrome_options)
+                driver.set_page_load_timeout(300)  # Increase page load timeout to 5 minutes
+                break
+            except Exception as e:
+                retry_count += 1
+                print(f"Failed to initialize Chrome (attempt {retry_count}): {str(e)}")
+                if retry_count == max_retries:
+                    raise Exception("Failed to initialize Chrome after maximum retries")
         
         download_dir = os.getcwd()
         
