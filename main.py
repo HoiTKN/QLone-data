@@ -127,6 +127,11 @@ def main():
         download_dir = os.getcwd()
         
         try:
+            # Debug information
+            print("Current working directory:", os.getcwd())
+            print("Environment variables:", {k: v for k, v in os.environ.items() if not k.startswith('_')})
+            print("Attempting to access website...")
+            
             # Login to website
             driver.get("https://qlone.masancloud.com/sample-report.html")
             time.sleep(3)
