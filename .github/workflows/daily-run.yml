@@ -39,4 +39,10 @@ jobs:
       env:
         USERNAME: ${{ secrets.QLONE_USERNAME }}
         PASSWORD: ${{ secrets.QLONE_PASSWORD }}
-      run: python main.py
+      run: |
+        # Start Xvfb
+        Xvfb :99 &
+        export DISPLAY=:99
+        
+        # Run the script with increased debugging
+        python -u main.py  # -u for unbuffered output
