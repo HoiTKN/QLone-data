@@ -16,10 +16,15 @@ from webdriver_manager.chrome import ChromeDriverManager
 def setup_chrome_options():
     """Setup Chrome options for running in GitHub Actions"""
     chrome_options = webdriver.ChromeOptions()
-    chrome_options.add_argument('--headless')  # Run in headless mode
+    chrome_options.add_argument('--headless=new')  # Use new headless mode
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--ignore-certificate-errors')
+    chrome_options.add_argument('--ignore-ssl-errors')
+    chrome_options.add_argument('--disable-web-security')
+    chrome_options.add_argument('--allow-running-insecure-content')
+    chrome_options.page_load_strategy = 'eager'  # Don't wait for all resources to load
     
     # Set up download preferences
     download_dir = os.getcwd()  # Use current directory for downloads
