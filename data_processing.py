@@ -45,6 +45,8 @@ def get_google_sheet_data(spreadsheet_id):
 
         # Dòng đầu tiên là header, các dòng sau là dữ liệu
         df = pd.DataFrame(values[1:], columns=values[0])
+        # Loại bỏ khoảng trắng thừa trong tên các cột
+        df.columns = df.columns.str.strip()
         return df
 
     except Exception as e:
@@ -60,7 +62,7 @@ def parse_ddmmyy(s):
     s = s.strip()
     if len(s) < 6:
         return None
-    s6 = s[:6]  # lấy đúng 6 ký tự đầu
+    s6 = s[:6]  # Lấy đúng 6 ký tự đầu
     try:
         return pd.to_datetime(s6, format='%d%m%y', errors='coerce')
     except:
@@ -76,8 +78,7 @@ def process_lot_dates(row):
       -> warehouse_date = 02/01/2025, supplier_date = 29/12/2024
       -> supplier_name = 'KIB08' (nếu != 'MBP')
     - IP/FG/GHP/...: chỉ có 1 ngày. Ví dụ: '020125-F2-MBP'
-      -> supplier_date = 02/01/2025
-      -> warehouse_date = None
+      -> supplier_date = 02/01/2025, warehouse_date = None
     """
     lot_number = str(row.get('Lot number', '')).strip()
     sample_type = str(row.get('Sample Type', '')).strip().lower()
@@ -112,14 +113,13 @@ def unify_date(row):
       - Nếu là IP/FG/GHP/...: dùng Receipt Date (nếu có), nếu không có thì fallback supplier_date.
     """
     sample_type = str(row.get("Sample Type", "")).lower()
-
     if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
-        if pd.notnull(row["warehouse_date"]):
+        if pd.notnull(row.get("warehouse_date")):
             return row["warehouse_date"]
         else:
             return row["supplier_date"]
     else:
-        if "Receipt Date" in row and pd.notnull(row["Receipt Date"]):
+        if "Receipt Date" in row and pd.notnull(row.get("Receipt Date")):
             return row["Receipt Date"]
         else:
             return row["supplier_date"]
@@ -131,7 +131,6 @@ def prepare_data():
     """
     try:
         print("Available secrets sections:", st.secrets.keys())
-
         sheet_url = st.secrets["sheet"]["url"]
         spreadsheet_id = sheet_url.split('/')[5]
         print("Spreadsheet ID:", spreadsheet_id)
