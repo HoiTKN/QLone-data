@@ -4,13 +4,11 @@ import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
 
-# --- (Nếu cần, xóa cache) ---
+# --- (Nếu cần, xóa cache để đảm bảo phiên bản mới được dùng) ---
 # st.cache_data.clear()
 
-# Cấu hình trang
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
-# Hàm load dữ liệu (cache 1 giờ)
 @st.cache_data(ttl=3600)
 def load_data():
     return prepare_data()
@@ -20,22 +18,15 @@ if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
-# Debug: In ra danh sách các cột để kiểm tra cột final_date có tồn tại không
+# Debug: In ra các cột để kiểm tra final_date đã tồn tại chưa
 st.write("Columns in DataFrame:", list(df.columns))
-
 if "final_date" not in df.columns:
-    st.error("Column 'final_date' does not exist. Vui lòng xóa cache hoặc kiểm tra lại data_processing.py!")
+    st.error("Column 'final_date' does not exist. Vui lòng xóa cache và kiểm tra lại data_processing.py!")
     st.stop()
 
-# -------------------------- HÀM TIỆN ÍCH -------------------------- #
 def apply_multiselect_filter(df, col_name, label):
-    """
-    Lọc dữ liệu theo các giá trị người dùng chọn.
-    Nếu không chọn gì, trả về dữ liệu gốc.
-    """
     if col_name not in df.columns:
         return df
-
     all_vals = sorted(df[col_name].dropna().unique())
     selected_vals = st.sidebar.multiselect(label, options=all_vals)
     if selected_vals:
@@ -49,12 +40,9 @@ def numeric_or_none(val):
     except:
         return None
 
-# -------------------------- SIDEBAR FILTERS ------------------------ #
 st.sidebar.title("Filters")
 
 filtered_df = df.copy()
-
-# Lọc theo các trường: Category description, Spec category, Spec description, Test description, Sample Type
 filtered_df = apply_multiselect_filter(filtered_df, "Category description", "Category description")
 filtered_df = apply_multiselect_filter(filtered_df, "Spec category", "Spec category")
 filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec description")
@@ -63,10 +51,8 @@ filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type"
 
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
-# --------------------- CHỌN KHOẢNG THỜI GIAN (dựa trên final_date) ---------------------- #
 st.sidebar.markdown("---")
 st.sidebar.subheader("Date Range Filter (Based on final_date)")
-
 available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
 if not available_dates.empty:
     min_date = available_dates.min().date()
@@ -82,10 +68,8 @@ else:
 
 st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
 
-# --------------------- TẠO CÁC TAB HIỂN THỊ ----------------------- #
 tabs = st.tabs(["Time Series", "SPC Chart", "Boxplot", "Distribution", "Pareto Chart"])
 
-# ======================== TAB 1: TIME SERIES =========================
 with tabs[0]:
     st.header("Time Series Chart")
     tests_ts = sorted(filtered_df["Test description"].dropna().unique())
@@ -94,7 +78,6 @@ with tabs[0]:
     else:
         selected_test_ts = st.selectbox("Select Test for Time Series", options=tests_ts)
         ts_data = filtered_df[filtered_df["Test description"] == selected_test_ts].copy()
-
         if ts_data.empty:
             st.warning("No data for the selected test.")
         else:
@@ -125,7 +108,6 @@ with tabs[0]:
             fig_ts.update_xaxes(type='date')
             st.plotly_chart(fig_ts, use_container_width=True)
 
-# ======================== TAB 2: SPC CHART ===========================
 with tabs[1]:
     st.header("SPC Chart")
     tests_spc = sorted(filtered_df["Test description"].dropna().unique())
@@ -134,7 +116,6 @@ with tabs[1]:
     else:
         selected_test_spc = st.selectbox("Select Test for SPC", options=tests_spc)
         spc_data = filtered_df[filtered_df["Test description"] == selected_test_spc].copy()
-
         if spc_data.empty:
             st.warning("No data for the selected test.")
         else:
@@ -169,7 +150,6 @@ with tabs[1]:
                 else:
                     st.write("Standard Deviation is zero, cannot compute CP/CPK.")
 
-# ======================== TAB 3: BOXPLOT ============================
 with tabs[2]:
     st.header("Boxplot (RM/PG) by Supplier")
     box_data = filtered_df[filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
@@ -186,7 +166,6 @@ with tabs[2]:
         )
         st.plotly_chart(fig_box, use_container_width=True)
 
-# ======================== TAB 4: DISTRIBUTION =======================
 with tabs[3]:
     st.header("Distribution Chart of Actual Result")
     if filtered_df.empty:
@@ -201,7 +180,6 @@ with tabs[3]:
         )
         st.plotly_chart(fig_dist, use_container_width=True)
 
-# ======================== TAB 5: PARETO ============================
 with tabs[4]:
     st.header("Pareto Chart (Out-of-Spec)")
     pareto_group_option = st.selectbox("Group by:", ["Test description", "Spec description"])
@@ -211,4 +189,37 @@ with tabs[4]:
         temp_df["USL"] = temp_df["Upper limit"].apply(numeric_or_none)
         temp_df["Act"] = temp_df["Actual result"].apply(numeric_or_none)
         temp_df["OutOfSpec"] = temp_df.apply(
-            lambda r: (r["Act"] is not None) and (r["LSL"] is not None) and (r["USL"] is
+            lambda r: (r["Act"] is not None) and (r["LSL"] is not None) and (r["USL"] is not None)
+                      and (r["Act"] < r["LSL"] or r["Act"] > r["USL"]),
+            axis=1
+        )
+        pareto_df = temp_df[temp_df["OutOfSpec"] == True].copy()
+        if pareto_df.empty:
+            st.info("No out-of-spec samples found.")
+        else:
+            grp_counts = pareto_df.groupby(pareto_group_option).size().reset_index(name="Count")
+            grp_counts = grp_counts.sort_values("Count", ascending=False)
+            grp_counts["Cumulative"] = grp_counts["Count"].cumsum()
+            grp_counts["Cumulative %"] = 100 * grp_counts["Cumulative"] / grp_counts["Count"].sum()
+            fig_pareto = go.Figure()
+            fig_pareto.add_trace(go.Bar(
+                x=grp_counts[pareto_group_option],
+                y=grp_counts["Count"],
+                name="Count"
+            ))
+            fig_pareto.add_trace(go.Scatter(
+                x=grp_counts[pareto_group_option],
+                y=grp_counts["Cumulative %"],
+                name="Cumulative %",
+                yaxis="y2",
+                mode="lines+markers"
+            ))
+            fig_pareto.update_layout(
+                title="Pareto Chart - Out-of-Spec",
+                xaxis_title=pareto_group_option,
+                yaxis=dict(title="Count"),
+                yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110])
+            )
+            st.plotly_chart(fig_pareto, use_container_width=True)
+    else:
+        st.warning("Missing 'Lower limit' or 'Upper limit' columns. Cannot compute out-of-spec.")
