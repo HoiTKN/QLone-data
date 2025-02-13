@@ -34,7 +34,7 @@ def get_google_sheet_data(spreadsheet_id):
         sheet_metadata = sheet.get(spreadsheetId=spreadsheet_id).execute()
         properties = sheet_metadata.get('sheets')[0].get('properties')
         sheet_name = properties.get('title')
-        range_name = f'{sheet_name}!A:M'  # Điều chỉnh range nếu cần
+        range_name = f'{sheet_name}!A:M'  # Điều chỉnh cột tùy nhu cầu
 
         result = sheet.values().get(
             spreadsheetId=spreadsheet_id,
@@ -53,6 +53,7 @@ def get_google_sheet_data(spreadsheet_id):
         st.error(f"Error accessing Google Sheets: {str(e)}")
         return None
 
+
 def parse_ddmmyy(s):
     """
     Parse chuỗi 6 ký tự dạng DDMMYY thành datetime (ví dụ '020125' -> 2025-01-02).
@@ -67,6 +68,7 @@ def parse_ddmmyy(s):
     except:
         return None
 
+
 def process_lot_dates(row):
     """
     Tách ngày warehouse_date và supplier_date từ 'Lot number'.
@@ -80,25 +82,18 @@ def process_lot_dates(row):
       -> warehouse_date = None
     """
     lot_number = str(row.get('Lot number', '')).strip()
-    sample_type = str(row.get('Sample Type', '')).strip()
+    sample_type = str(row.get('Sample Type', '')).strip().lower()
 
-    # Dùng so khớp linh hoạt (bỏ qua chữ hoa/thường) để xác định RM/PG
-    stype_lower = sample_type.lower()
-    is_rm_pg = False
-    # Nếu trong sample_type có "rm" hoặc "raw material" hoặc "pg" hoặc "packaging"
-    if ("rm" in stype_lower or "raw material" in stype_lower or
-        "pg" in stype_lower or "packaging" in stype_lower):
-        is_rm_pg = True
-
-    # Tách theo dấu '-'. Loại bỏ phần tử rỗng, đồng thời strip() từng phần
+    # Tách theo dấu '-'
     parts = [p.strip() for p in lot_number.split('-') if p.strip()]
 
     warehouse_date = None
     supplier_date = None
     supplier_name = None
 
-    if is_rm_pg:
-        # parse warehouse_date từ parts[0] (6 ký tự)
+    # Kiểm tra xem có phải RM/PG không (bỏ qua khác biệt viết hoa/thường)
+    if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
+        # parse warehouse_date từ parts[0]
         if len(parts) >= 1:
             warehouse_date = parse_ddmmyy(parts[0])
 
@@ -114,11 +109,30 @@ def process_lot_dates(row):
         if len(parts) >= 1:
             supplier_date = parse_ddmmyy(parts[0])
 
-    # Debug: in log (nếu muốn xem trên Cloud, thay st.write bằng print)
-    # print(f"DEBUG Lot: '{lot_number}', Type: '{sample_type}', is_rm_pg={is_rm_pg}, "
-    #       f"Parsed -> warehouse_date={warehouse_date}, supplier_date={supplier_date}, supplier_name={supplier_name}")
-
     return pd.Series([warehouse_date, supplier_date, supplier_name])
+
+
+def unify_date(row):
+    """
+    Trả về cột ngày thống nhất (final_date) cho mọi loại Sample:
+      - Nếu là RM/PG: dùng warehouse_date (nếu có) hoặc supplier_date.
+      - Nếu là IP/FG/GHP/...: dùng Receipt Date (nếu có), nếu không có thì fallback supplier_date.
+    """
+    sample_type = str(row.get("Sample Type", "")).lower()
+
+    # RM/PG -> ưu tiên warehouse_date, nếu trống thì dùng supplier_date
+    if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
+        if pd.notnull(row["warehouse_date"]):
+            return row["warehouse_date"]
+        else:
+            return row["supplier_date"]
+    else:
+        # IP/FG/... -> ưu tiên Receipt Date, nếu trống thì dùng supplier_date
+        if "receipt date" in row and pd.notnull(row["Receipt Date"]):
+            return row["Receipt Date"]
+        else:
+            return row["supplier_date"]
+
 
 def prepare_data():
     """
@@ -138,25 +152,24 @@ def prepare_data():
         if df is None:
             return None
 
-        # Chuyển đổi cột "Receipt Date" (nếu có) với dayfirst=True 
-        # vì dữ liệu có dạng DD-MM-YYYY HH:MM:SS
+        # Chuyển đổi cột "Receipt Date" (nếu có) với dayfirst=True
         if "Receipt Date" in df.columns:
             df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
 
-        # Xử lý cột 'Lot number' -> tách warehouse_date, supplier_date, supplier_name
+        # Tách warehouse_date, supplier_date, supplier_name từ Lot number
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
 
-        # Chuyển đổi "Actual result" thành số (loại bỏ ký tự không phải số)
+        # Tạo cột "final_date" thống nhất
+        df["final_date"] = df.apply(unify_date, axis=1)
+
+        # Chuyển đổi "Actual result" thành số
         if "Actual result" in df.columns:
             df['Actual result'] = pd.to_numeric(
                 df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
                 errors='coerce'
             )
-
-        # Bạn có thể in thử 5 dòng đầu để kiểm tra parse
-        # print(df[['Sample Type','Lot number','warehouse_date','supplier_date','supplier_name','Actual result']].head(10))
 
         return df
 
