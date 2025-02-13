@@ -1,5 +1,3 @@
-# data_processing.py
-
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -84,28 +82,23 @@ def process_lot_dates(row):
     lot_number = str(row.get('Lot number', '')).strip()
     sample_type = str(row.get('Sample Type', '')).strip().lower()
 
-    # Tách theo dấu '-'
+    # Tách theo dấu '-' và loại bỏ phần tử rỗng
     parts = [p.strip() for p in lot_number.split('-') if p.strip()]
 
     warehouse_date = None
     supplier_date = None
     supplier_name = None
 
-    # Kiểm tra xem có phải RM/PG không (bỏ qua khác biệt viết hoa/thường)
+    # Nếu Sample Type thuộc RM/PG (so khớp linh hoạt)
     if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
-        # parse warehouse_date từ parts[0]
         if len(parts) >= 1:
             warehouse_date = parse_ddmmyy(parts[0])
-
-        # parse supplier_name từ parts[1], nếu != 'MBP'
         if len(parts) >= 2 and parts[1] != 'MBP':
             supplier_name = parts[1]
-
-        # parse supplier_date từ parts[2]
         if len(parts) >= 3:
             supplier_date = parse_ddmmyy(parts[2])
     else:
-        # IP, FG, GHP... => chỉ 1 ngày -> supplier_date
+        # Với các loại khác (IP, FG, GHP, ...)
         if len(parts) >= 1:
             supplier_date = parse_ddmmyy(parts[0])
 
@@ -120,15 +113,13 @@ def unify_date(row):
     """
     sample_type = str(row.get("Sample Type", "")).lower()
 
-    # RM/PG -> ưu tiên warehouse_date, nếu trống thì dùng supplier_date
     if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
         if pd.notnull(row["warehouse_date"]):
             return row["warehouse_date"]
         else:
             return row["supplier_date"]
     else:
-        # IP/FG/... -> ưu tiên Receipt Date, nếu trống thì dùng supplier_date
-        if "receipt date" in row and pd.notnull(row["Receipt Date"]):
+        if "Receipt Date" in row and pd.notnull(row["Receipt Date"]):
             return row["Receipt Date"]
         else:
             return row["supplier_date"]
@@ -139,32 +130,27 @@ def prepare_data():
     Xử lý dữ liệu cho dashboard.
     """
     try:
-        # Debug: in ra các key có trong st.secrets
         print("Available secrets sections:", st.secrets.keys())
 
-        # Lấy URL từ phần [sheet] và tách lấy spreadsheet_id
         sheet_url = st.secrets["sheet"]["url"]
         spreadsheet_id = sheet_url.split('/')[5]
         print("Spreadsheet ID:", spreadsheet_id)
 
-        # Lấy dữ liệu từ Google Sheets
         df = get_google_sheet_data(spreadsheet_id)
         if df is None:
             return None
 
-        # Chuyển đổi cột "Receipt Date" (nếu có) với dayfirst=True
         if "Receipt Date" in df.columns:
             df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
 
-        # Tách warehouse_date, supplier_date, supplier_name từ Lot number
+        # Tách các thông tin từ Lot number
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
 
-        # Tạo cột "final_date" thống nhất
+        # Tạo cột final_date thống nhất
         df["final_date"] = df.apply(unify_date, axis=1)
 
-        # Chuyển đổi "Actual result" thành số
         if "Actual result" in df.columns:
             df['Actual result'] = pd.to_numeric(
                 df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
