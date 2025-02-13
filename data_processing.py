@@ -8,9 +8,8 @@ from googleapiclient.discovery import build
 
 def get_google_sheet_data(spreadsheet_id):
     """
-    Kết nối Google Sheets và lấy dữ liệu, dùng credentials từ st.secrets
+    Kết nối đến Google Sheets và lấy dữ liệu bằng cách sử dụng thông tin từ st.secrets.
     """
-    # Tạo dict credentials từ phần [gcp_service_account] trong secrets
     credentials_dict = {
         "type": st.secrets["gcp_service_account"]["type"],
         "project_id": st.secrets["gcp_service_account"]["project_id"],
@@ -27,20 +26,15 @@ def get_google_sheet_data(spreadsheet_id):
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
 
     try:
-        # Tạo credentials từ service account info
         creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-
-        # Tạo service kết nối Sheets API
         service = build('sheets', 'v4', credentials=creds)
         sheet = service.spreadsheets()
 
-        # Lấy thông tin metadata của sheet để xác định range
+        # Lấy thông tin metadata của sheet để xác định tên sheet
         sheet_metadata = sheet.get(spreadsheetId=spreadsheet_id).execute()
         properties = sheet_metadata.get('sheets')[0].get('properties')
         sheet_name = properties.get('title')
-        
-        # Ở đây ví dụ lấy cột A:M, bạn điều chỉnh tùy nhu cầu
-        range_name = f'{sheet_name}!A:M'
+        range_name = f'{sheet_name}!A:M'  # Điều chỉnh range nếu cần
 
         result = sheet.values().get(
             spreadsheetId=spreadsheet_id,
@@ -51,7 +45,7 @@ def get_google_sheet_data(spreadsheet_id):
         if not values:
             raise ValueError("No data found in the sheet")
 
-        # Dòng đầu tiên (values[0]) là header, các dòng sau là data
+        # Dòng đầu tiên là header, các dòng sau là dữ liệu
         df = pd.DataFrame(values[1:], columns=values[0])
         return df
 
@@ -62,49 +56,43 @@ def get_google_sheet_data(spreadsheet_id):
 
 def process_lot_dates(row):
     """
-    Tách ngày warehouse và supplier từ 'Lot number'
-    Chỉ áp dụng cho RM - Raw material và PG - Packaging
+    Tách ngày warehouse và supplier từ 'Lot number'.
+    Chỉ áp dụng cho các sample type RM - Raw material và PG - Packaging.
     """
     lot_number = row['Lot number']
     sample_type = row['Sample Type']
 
-    # Trường hợp lot_number không phải chuỗi
     if not isinstance(lot_number, str):
         return pd.Series([None, None, None])
 
-    # Nếu sample_type không phải RM hoặc PG, chỉ lấy thử date đầu
     if sample_type not in ['RM - Raw material', 'PG - Packaging']:
         parts = lot_number.split('-')
         warehouse_date = None
         if len(parts[0]) >= 4:
             try:
                 warehouse_date = pd.to_datetime(parts[0][:4] + '25', format='%m%d%y')
-            except:
+            except Exception:
                 pass
         return pd.Series([warehouse_date, None, None])
 
-    # Với RM và PG, tách warehouse_date, supplier_date, supplier_name
     parts = lot_number.split('-')
     warehouse_date = None
     supplier_date = None
     supplier_name = None
 
     if len(parts) >= 2:
-        # Tách warehouse_date (phần đầu)
         if len(parts[0]) >= 4:
             try:
                 warehouse_date = pd.to_datetime(parts[0][:4] + '25', format='%m%d%y')
-            except:
+            except Exception:
                 pass
 
-        # Tách supplier_name (nếu != "MBP")
         supplier_name = parts[1] if parts[1] != 'MBP' else None
 
-        # Tách supplier_date (nếu có phần thứ 3)
         if len(parts) >= 3 and len(parts[2]) >= 4:
             try:
                 supplier_date = pd.to_datetime(parts[2][:4] + '25', format='%m%d%y')
-            except:
+            except Exception:
                 pass
 
     return pd.Series([warehouse_date, supplier_date, supplier_name])
@@ -112,33 +100,31 @@ def process_lot_dates(row):
 
 def prepare_data():
     """
-    Hàm chính để xử lý dữ liệu cho dashboard
+    Xử lý dữ liệu cho dashboard.
     """
     try:
-        # Kiểm tra các phần trong secrets (debug)
+        # Debug: in ra các key có trong st.secrets
         print("Available secrets sections:", st.secrets.keys())
 
-        # Lấy URL từ secrets (phần [sheet]) và tách ID
+        # Lấy URL từ phần [sheet] và tách lấy spreadsheet_id
         sheet_url = st.secrets["sheet"]["url"]
         spreadsheet_id = sheet_url.split('/')[5]
         print("Spreadsheet ID:", spreadsheet_id)
 
-        # Gọi hàm lấy dữ liệu từ Google Sheets
+        # Lấy dữ liệu từ Google Sheets
         df = get_google_sheet_data(spreadsheet_id)
         if df is None:
             return None
 
-        # Convert cột "Receipt Date" sang datetime
-        df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce')
+        # Chuyển đổi cột "Receipt Date" với dayfirst=True để phù hợp với định dạng "18-01-2025 09:50:52"
+        df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
 
-        # Xử lý cột lot number để tách warehouse_date, supplier_date, supplier_name
+        # Xử lý cột 'Lot number'
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
 
-        # Convert "Actual result" về dạng số
-        # - Thay dấu phẩy thành dấu chấm
-        # - Tách chuỗi chỉ lấy phần số
+        # Chuyển đổi "Actual result" thành số (loại bỏ ký tự không phải số)
         df['Actual result'] = pd.to_numeric(
             df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
             errors='coerce'
