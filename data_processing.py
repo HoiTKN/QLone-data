@@ -53,12 +53,12 @@ def get_google_sheet_data(spreadsheet_id):
         st.error(f"Error accessing Google Sheets: {str(e)}")
         return None
 
-
 def parse_ddmmyy(s):
     """
     Parse chuỗi 6 ký tự dạng DDMMYY thành datetime (ví dụ '020125' -> 2025-01-02).
     Trả về None nếu parse thất bại.
     """
+    s = s.strip()
     if len(s) < 6:
         return None
     s6 = s[:6]  # lấy đúng 6 ký tự đầu
@@ -66,7 +66,6 @@ def parse_ddmmyy(s):
         return pd.to_datetime(s6, format='%d%m%y', errors='coerce')
     except:
         return None
-
 
 def process_lot_dates(row):
     """
@@ -80,49 +79,46 @@ def process_lot_dates(row):
       -> supplier_date = 02/01/2025
       -> warehouse_date = None
     """
-    lot_number = row.get('Lot number', '')
-    sample_type = row.get('Sample Type', '')
+    lot_number = str(row.get('Lot number', '')).strip()
+    sample_type = str(row.get('Sample Type', '')).strip()
 
-    # Xử lý khoảng trắng
-    lot_number = lot_number.strip()
+    # Dùng so khớp linh hoạt (bỏ qua chữ hoa/thường) để xác định RM/PG
+    stype_lower = sample_type.lower()
+    is_rm_pg = False
+    # Nếu trong sample_type có "rm" hoặc "raw material" hoặc "pg" hoặc "packaging"
+    if ("rm" in stype_lower or "raw material" in stype_lower or
+        "pg" in stype_lower or "packaging" in stype_lower):
+        is_rm_pg = True
+
     # Tách theo dấu '-'. Loại bỏ phần tử rỗng, đồng thời strip() từng phần
     parts = [p.strip() for p in lot_number.split('-') if p.strip()]
 
-    # Debug xem lot_number có bao nhiêu phần
-    # st.write(f"DEBUG - lot_number='{lot_number}', parts={parts}, sample_type={sample_type}")
+    warehouse_date = None
+    supplier_date = None
+    supplier_name = None
 
-    # Trường hợp RM/PG => parse 2 ngày
-    if sample_type in ['RM - Raw material', 'PG - Packaging']:
-        warehouse_date = None
-        supplier_date = None
-        supplier_name = None
-
+    if is_rm_pg:
         # parse warehouse_date từ parts[0] (6 ký tự)
         if len(parts) >= 1:
             warehouse_date = parse_ddmmyy(parts[0])
 
         # parse supplier_name từ parts[1], nếu != 'MBP'
-        if len(parts) >= 2:
-            if parts[1] != 'MBP':
-                supplier_name = parts[1]
+        if len(parts) >= 2 and parts[1] != 'MBP':
+            supplier_name = parts[1]
 
         # parse supplier_date từ parts[2]
         if len(parts) >= 3:
             supplier_date = parse_ddmmyy(parts[2])
-
-        return pd.Series([warehouse_date, supplier_date, supplier_name])
-
     else:
         # IP, FG, GHP... => chỉ 1 ngày -> supplier_date
-        warehouse_date = None
-        supplier_date = None
-        supplier_name = None
-
         if len(parts) >= 1:
             supplier_date = parse_ddmmyy(parts[0])
 
-        return pd.Series([warehouse_date, supplier_date, supplier_name])
+    # Debug: in log (nếu muốn xem trên Cloud, thay st.write bằng print)
+    # print(f"DEBUG Lot: '{lot_number}', Type: '{sample_type}', is_rm_pg={is_rm_pg}, "
+    #       f"Parsed -> warehouse_date={warehouse_date}, supplier_date={supplier_date}, supplier_name={supplier_name}")
 
+    return pd.Series([warehouse_date, supplier_date, supplier_name])
 
 def prepare_data():
     """
@@ -158,6 +154,9 @@ def prepare_data():
                 df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
                 errors='coerce'
             )
+
+        # Bạn có thể in thử 5 dòng đầu để kiểm tra parse
+        # print(df[['Sample Type','Lot number','warehouse_date','supplier_date','supplier_name','Actual result']].head(10))
 
         return df
 
