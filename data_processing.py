@@ -1,26 +1,41 @@
 import pandas as pd
 import numpy as np
+import json
+import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 
-def get_google_sheet_data(spreadsheet_id, range_name):
+def get_google_sheet_data(spreadsheet_id):
     """
-    Connect to Google Sheets and get data
+    Connect to Google Sheets and get data using Streamlit secrets
     """
+    # Create credentials from Streamlit secrets
+    credentials_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-    creds = Credentials.from_service_account_file(
-        'path_to_your_credentials.json',  # You'll need to update this path
+    
+    creds = Credentials.from_service_account_info(
+        credentials_dict,
         scopes=scopes
     )
     
     service = build('sheets', 'v4', credentials=creds)
     sheet = service.spreadsheets()
+    
+    # Get the sheet range dynamically
+    sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    properties = sheet_metadata.get('sheets')[0].get('properties')
+    sheet_name = properties.get('title')
+    range_name = f'{sheet_name}!A:M'  # Adjust columns as needed
+    
     result = sheet.values().get(
         spreadsheetId=spreadsheet_id,
         range=range_name
     ).execute()
     
     values = result.get('values', [])
+    if not values:
+        raise ValueError("No data found in the sheet")
+        
     df = pd.DataFrame(values[1:], columns=values[0])
     return df
 
@@ -71,25 +86,33 @@ def process_lot_dates(row):
     
     return pd.Series([warehouse_date, supplier_date, supplier_name])
 
-def prepare_data(spreadsheet_id, range_name):
+def prepare_data():
     """
     Prepare data for analysis
     """
-    # Get data from Google Sheets
-    df = get_google_sheet_data(spreadsheet_id, range_name)
-    
-    # Convert Receipt Date to datetime
-    df['Receipt Date'] = pd.to_datetime(df['Receipt Date'])
-    
-    # Process lot numbers
-    lot_info = df.apply(process_lot_dates, axis=1)
-    lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
-    df = pd.concat([df, lot_info], axis=1)
-    
-    # Convert Actual result to numeric, removing any non-numeric characters
-    df['Actual result'] = pd.to_numeric(
-        df['Actual result'].str.replace(',', '.').str.extract('(\d+\.?\d*)')[0],
-        errors='coerce'
-    )
-    
-    return df
+    try:
+        # Get spreadsheet ID from secrets
+        spreadsheet_id = st.secrets["SPREADSHEET_ID"]
+        
+        # Get data from Google Sheets
+        df = get_google_sheet_data(spreadsheet_id)
+        
+        # Convert Receipt Date to datetime
+        df['Receipt Date'] = pd.to_datetime(df['Receipt Date'])
+        
+        # Process lot numbers
+        lot_info = df.apply(process_lot_dates, axis=1)
+        lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
+        df = pd.concat([df, lot_info], axis=1)
+        
+        # Convert Actual result to numeric, removing any non-numeric characters
+        df['Actual result'] = pd.to_numeric(
+            df['Actual result'].str.replace(',', '.').str.extract('(\d+\.?\d*)')[0],
+            errors='coerce'
+        )
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error processing data: {str(e)}")
+        return None
