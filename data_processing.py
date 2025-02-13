@@ -53,50 +53,65 @@ def get_google_sheet_data(spreadsheet_id):
         st.error(f"Error accessing Google Sheets: {str(e)}")
         return None
 
-
 def process_lot_dates(row):
     """
-    Tách ngày warehouse và supplier từ 'Lot number'.
-    Chỉ áp dụng cho các sample type RM - Raw material và PG - Packaging.
-    """
-    lot_number = row['Lot number']
-    sample_type = row['Sample Type']
+    Tách ngày warehouse_date và supplier_date từ 'Lot number'.
 
+    - Nếu Sample Type là RM - Raw material hoặc PG - Packaging, 
+      thì Lot number có dạng: DDMMYY-[SupplierName]DD-DDMMYY-MBP (thường 4 phần).
+      -> parse 2 ngày:
+         + parts[0] (DDMMYY) -> warehouse_date
+         + parts[2] (DDMMYY) -> supplier_date (nếu đủ dài)
+         + supplier_name = parts[1] (nếu != "MBP")
+    - Nếu Sample Type khác (IP, FG, GHP...), thì chỉ có 1 ngày: DDMMYY-...
+      -> parse 1 ngày:
+         + parts[0] (DDMMYY) -> supplier_date
+    """
+    lot_number = row.get('Lot number', None)
+    sample_type = row.get('Sample Type', None)
+
+    # Mặc định trả về [None, None, None] nếu không parse được
     if not isinstance(lot_number, str):
         return pd.Series([None, None, None])
 
-    if sample_type not in ['RM - Raw material', 'PG - Packaging']:
-        parts = lot_number.split('-')
-        warehouse_date = None
-        if len(parts[0]) >= 4:
-            try:
-                warehouse_date = pd.to_datetime(parts[0][:4] + '25', format='%m%d%y')
-            except Exception:
-                pass
-        return pd.Series([warehouse_date, None, None])
-
     parts = lot_number.split('-')
-    warehouse_date = None
-    supplier_date = None
-    supplier_name = None
+    # Trường hợp RM/PG
+    if sample_type in ['RM - Raw material', 'PG - Packaging']:
+        warehouse_date = None
+        supplier_date = None
+        supplier_name = None
 
-    if len(parts) >= 2:
-        if len(parts[0]) >= 4:
+        # parse warehouse_date từ parts[0] (nếu đủ 6 ký tự)
+        if len(parts) >= 1 and len(parts[0]) == 6:
             try:
-                warehouse_date = pd.to_datetime(parts[0][:4] + '25', format='%m%d%y')
-            except Exception:
-                pass
+                warehouse_date = pd.to_datetime(parts[0], format='%d%m%y', errors='coerce')
+            except:
+                warehouse_date = None
 
-        supplier_name = parts[1] if parts[1] != 'MBP' else None
+        # parse supplier_name từ parts[1] (nếu != "MBP")
+        if len(parts) >= 2:
+            if parts[1] != 'MBP':
+                supplier_name = parts[1]
 
-        if len(parts) >= 3 and len(parts[2]) >= 4:
+        # parse supplier_date từ parts[2] (nếu tồn tại và đủ 6 ký tự)
+        if len(parts) >= 3 and len(parts[2]) == 6:
             try:
-                supplier_date = pd.to_datetime(parts[2][:4] + '25', format='%m%d%y')
-            except Exception:
-                pass
+                supplier_date = pd.to_datetime(parts[2], format='%d%m%y', errors='coerce')
+            except:
+                supplier_date = None
 
-    return pd.Series([warehouse_date, supplier_date, supplier_name])
+        return pd.Series([warehouse_date, supplier_date, supplier_name])
 
+    else:
+        # Trường hợp IP, FG, GHP... -> chỉ có 1 ngày (parts[0])
+        supplier_date = None
+        if len(parts) >= 1 and len(parts[0]) == 6:
+            try:
+                supplier_date = pd.to_datetime(parts[0], format='%d%m%y', errors='coerce')
+            except:
+                supplier_date = None
+
+        return pd.Series([None, supplier_date, None])
 
 def prepare_data():
     """
@@ -116,19 +131,22 @@ def prepare_data():
         if df is None:
             return None
 
-        # Chuyển đổi cột "Receipt Date" với dayfirst=True để phù hợp với định dạng "18-01-2025 09:50:52"
-        df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
+        # Chuyển đổi cột "Receipt Date" (nếu có) với dayfirst=True 
+        # để phù hợp với định dạng kiểu "18-01-2025 09:50:52"
+        if "Receipt Date" in df.columns:
+            df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
 
-        # Xử lý cột 'Lot number'
+        # Xử lý cột 'Lot number' -> tách warehouse_date, supplier_date, supplier_name
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
 
         # Chuyển đổi "Actual result" thành số (loại bỏ ký tự không phải số)
-        df['Actual result'] = pd.to_numeric(
-            df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
-            errors='coerce'
-        )
+        if "Actual result" in df.columns:
+            df['Actual result'] = pd.to_numeric(
+                df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
+                errors='coerce'
+            )
 
         return df
 
