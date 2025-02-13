@@ -4,9 +4,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
 
-# --- (Nếu cần, xóa cache để đảm bảo phiên bản mới được dùng) ---
-# st.cache_data.clear()
-
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
 @st.cache_data(ttl=3600)
@@ -18,10 +15,9 @@ if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
-# Debug: In ra các cột để kiểm tra final_date đã tồn tại chưa
-st.write("Columns in DataFrame:", list(df.columns))
+# Debug: Kiểm tra cột final_date
 if "final_date" not in df.columns:
-    st.error("Column 'final_date' does not exist. Vui lòng xóa cache và kiểm tra lại data_processing.py!")
+    st.error("Column 'final_date' does not exist. Check data_processing.py!")
     st.stop()
 
 def apply_multiselect_filter(df, col_name, label):
@@ -40,6 +36,7 @@ def numeric_or_none(val):
     except:
         return None
 
+# ------------------ SIDEBAR FILTERS ------------------ #
 st.sidebar.title("Filters")
 
 filtered_df = df.copy()
@@ -51,8 +48,10 @@ filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type"
 
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
+# -------------- DATE RANGE FILTER (final_date) -------------- #
 st.sidebar.markdown("---")
 st.sidebar.subheader("Date Range Filter (Based on final_date)")
+
 available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
 if not available_dates.empty:
     min_date = available_dates.min().date()
@@ -68,28 +67,40 @@ else:
 
 st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
 
+# ------------------ TABS ------------------ #
 tabs = st.tabs(["Time Series", "SPC Chart", "Boxplot", "Distribution", "Pareto Chart"])
 
+# ================= TAB 1: TIME SERIES ================= #
 with tabs[0]:
     st.header("Time Series Chart")
+
+    # Chọn Test
     tests_ts = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_ts:
-        st.warning("No 'Test description' available in the filtered data.")
+        st.warning("No 'Test description' available.")
     else:
         selected_test_ts = st.selectbox("Select Test for Time Series", options=tests_ts)
         ts_data = filtered_df[filtered_df["Test description"] == selected_test_ts].copy()
+
         if ts_data.empty:
             st.warning("No data for the selected test.")
         else:
+            # Sắp xếp theo final_date
+            ts_data.sort_values(by="final_date", inplace=True)
+
             fig_ts = go.Figure()
             group_supplier_ts = st.checkbox("Group by Supplier (RM/PG)", value=False)
+
             if group_supplier_ts:
-                for sup in ts_data["supplier_name"].dropna().unique():
+                suppliers = ts_data["supplier_name"].dropna().unique()
+                for sup in suppliers:
                     sup_data = ts_data[ts_data["supplier_name"] == sup]
                     fig_ts.add_trace(go.Scatter(
                         x=sup_data["final_date"],
                         y=sup_data["Actual result"],
                         mode="lines+markers",
+                        line_shape="spline",          # đường cong mềm
+                        connectgaps=False,            # không nối các điểm trống
                         name=f"Supplier {sup}"
                     ))
             else:
@@ -97,8 +108,11 @@ with tabs[0]:
                     x=ts_data["final_date"],
                     y=ts_data["Actual result"],
                     mode="lines+markers",
+                    line_shape="spline",
+                    connectgaps=False,
                     name="Actual Result"
                 ))
+
             fig_ts.update_layout(
                 title=f"Time Series - {selected_test_ts}",
                 xaxis_title="Date",
@@ -108,30 +122,42 @@ with tabs[0]:
             fig_ts.update_xaxes(type='date')
             st.plotly_chart(fig_ts, use_container_width=True)
 
+# ================= TAB 2: SPC CHART ================= #
 with tabs[1]:
     st.header("SPC Chart")
+
     tests_spc = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_spc:
-        st.warning("No 'Test description' available in the filtered data.")
+        st.warning("No 'Test description' available.")
     else:
         selected_test_spc = st.selectbox("Select Test for SPC", options=tests_spc)
         spc_data = filtered_df[filtered_df["Test description"] == selected_test_spc].copy()
+
         if spc_data.empty:
             st.warning("No data for the selected test.")
         else:
+            # Sắp xếp theo final_date
+            spc_data.sort_values(by="final_date", inplace=True)
+
             fig_spc = go.Figure()
             fig_spc.add_trace(go.Scatter(
                 x=spc_data["final_date"],
                 y=spc_data["Actual result"],
                 mode="lines+markers",
+                line_shape="spline",
+                connectgaps=False,
                 name="Actual Result"
             ))
+
+            # Thêm LSL/USL nếu có
             lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns else None
             usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns else None
+
             if lsl_val is not None:
                 fig_spc.add_hline(y=lsl_val, line_dash="dash", line_color="red", annotation_text="LSL")
             if usl_val is not None:
                 fig_spc.add_hline(y=usl_val, line_dash="dash", line_color="red", annotation_text="USL")
+
             fig_spc.update_layout(
                 title=f"SPC Chart - {selected_test_spc}",
                 xaxis_title="Date",
@@ -140,6 +166,8 @@ with tabs[1]:
             )
             fig_spc.update_xaxes(type='date')
             st.plotly_chart(fig_spc, use_container_width=True)
+
+            # Tính CP/CPK
             if (lsl_val is not None) and (usl_val is not None):
                 mean_val = spc_data["Actual result"].mean()
                 std_val = spc_data["Actual result"].std()
@@ -150,22 +178,51 @@ with tabs[1]:
                 else:
                     st.write("Standard Deviation is zero, cannot compute CP/CPK.")
 
+# ================ TAB 3: BOXPLOT ================ #
 with tabs[2]:
-    st.header("Boxplot (RM/PG) by Supplier")
-    box_data = filtered_df[filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
-    if box_data.empty:
-        st.warning("No RM/PG data available.")
-    else:
-        box_data["SupplierShort"] = box_data["supplier_name"].dropna().apply(lambda x: x[:3] if isinstance(x, str) else x)
-        fig_box = px.box(
-            box_data,
-            x="SupplierShort",
-            y="Actual result",
-            points="all",
-            title="Boxplot of Actual Results by Supplier (Short Name)"
-        )
-        st.plotly_chart(fig_box, use_container_width=True)
+    st.header("Boxplot")
 
+    # Kiểm tra xem data có RM/PG không
+    rm_pg_data = filtered_df[filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
+    non_rm_pg_data = filtered_df[~filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
+
+    # Tạo 2 expanders để hiển thị hai kiểu boxplot khác nhau
+    with st.expander("Boxplot for RM/PG by Supplier", expanded=False):
+        if rm_pg_data.empty:
+            st.info("No RM/PG data available.")
+        else:
+            # Rút gọn supplier_name còn 3 ký tự
+            rm_pg_data["SupplierShort"] = rm_pg_data["supplier_name"].dropna().apply(
+                lambda x: x[:3] if isinstance(x, str) else x
+            )
+            fig_box_rm = px.box(
+                rm_pg_data,
+                x="SupplierShort",
+                y="Actual result",
+                points="all",
+                title="RM/PG - Boxplot by Supplier"
+            )
+            st.plotly_chart(fig_box_rm, use_container_width=True)
+
+    with st.expander("Boxplot for Non-RM/PG (IP, FG...) by Month", expanded=False):
+        if non_rm_pg_data.empty:
+            st.info("No non-RM/PG data available.")
+        else:
+            # Tạo cột Month từ final_date
+            non_rm_pg_data["Month"] = pd.to_datetime(non_rm_pg_data["final_date"], errors='coerce').dt.to_period("M")
+            # Chuyển period -> string
+            non_rm_pg_data["Month"] = non_rm_pg_data["Month"].astype(str)
+
+            fig_box_non = px.box(
+                non_rm_pg_data,
+                x="Month",
+                y="Actual result",
+                points="all",
+                title="Non-RM/PG - Boxplot by Month"
+            )
+            st.plotly_chart(fig_box_non, use_container_width=True)
+
+# ================ TAB 4: DISTRIBUTION ================ #
 with tabs[3]:
     st.header("Distribution Chart of Actual Result")
     if filtered_df.empty:
@@ -180,6 +237,7 @@ with tabs[3]:
         )
         st.plotly_chart(fig_dist, use_container_width=True)
 
+# ================ TAB 5: PARETO ================ #
 with tabs[4]:
     st.header("Pareto Chart (Out-of-Spec)")
     pareto_group_option = st.selectbox("Group by:", ["Test description", "Spec description"])
@@ -201,6 +259,7 @@ with tabs[4]:
             grp_counts = grp_counts.sort_values("Count", ascending=False)
             grp_counts["Cumulative"] = grp_counts["Count"].cumsum()
             grp_counts["Cumulative %"] = 100 * grp_counts["Cumulative"] / grp_counts["Count"].sum()
+
             fig_pareto = go.Figure()
             fig_pareto.add_trace(go.Bar(
                 x=grp_counts[pareto_group_option],
