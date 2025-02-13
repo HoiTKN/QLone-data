@@ -4,6 +4,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
 
+# --- (Nếu cần, xóa cache) ---
+# st.cache_data.clear()
+
 # Cấu hình trang
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
@@ -17,24 +20,30 @@ if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
+# Debug: In ra danh sách các cột để kiểm tra cột final_date có tồn tại không
+st.write("Columns in DataFrame:", list(df.columns))
+
+if "final_date" not in df.columns:
+    st.error("Column 'final_date' does not exist. Vui lòng xóa cache hoặc kiểm tra lại data_processing.py!")
+    st.stop()
+
 # -------------------------- HÀM TIỆN ÍCH -------------------------- #
 def apply_multiselect_filter(df, col_name, label):
     """
-    Trả về df đã được lọc dựa trên các giá trị người dùng chọn trong multiselect.
-    Nếu người dùng không chọn gì -> không lọc (lấy tất cả).
+    Lọc dữ liệu theo các giá trị người dùng chọn.
+    Nếu không chọn gì, trả về dữ liệu gốc.
     """
     if col_name not in df.columns:
-        return df  # cột không tồn tại, bỏ qua
+        return df
 
     all_vals = sorted(df[col_name].dropna().unique())
     selected_vals = st.sidebar.multiselect(label, options=all_vals)
-    if selected_vals:  # nếu user chọn ít nhất 1
+    if selected_vals:
         return df[df[col_name].isin(selected_vals)]
     else:
-        return df  # user chưa chọn gì -> giữ nguyên
+        return df
 
 def numeric_or_none(val):
-    """Chuyển val về float nếu được, ngược lại None."""
     try:
         return float(val)
     except:
@@ -45,50 +54,31 @@ st.sidebar.title("Filters")
 
 filtered_df = df.copy()
 
-# 1) Category description
+# Lọc theo các trường: Category description, Spec category, Spec description, Test description, Sample Type
 filtered_df = apply_multiselect_filter(filtered_df, "Category description", "Category description")
-
-# 2) Spec category
 filtered_df = apply_multiselect_filter(filtered_df, "Spec category", "Spec category")
-
-# 3) Spec description
 filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec description")
-
-# 4) Test description
 filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
-
-# 5) Sample Type
 filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
 
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
-# --------------------- CHỌN KHOẢNG THỜI GIAN (final_date) ---------------------- #
+# --------------------- CHỌN KHOẢNG THỜI GIAN (dựa trên final_date) ---------------------- #
 st.sidebar.markdown("---")
 st.sidebar.subheader("Date Range Filter (Based on final_date)")
 
-if "final_date" in filtered_df.columns:
-    available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
-    if not available_dates.empty:
-        min_date = available_dates.min().date()
-        max_date = available_dates.max().date()
-        # Chọn khoảng ngày
-        date_range = st.sidebar.date_input(
-            "Select Date Range",
-            value=(min_date, max_date)
-        )
-        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
-            start_date, end_date = date_range
-            # Lọc theo final_date
-            mask = (
-                pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date
-            ) & (
-                pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date
-            )
-            filtered_df = filtered_df[mask]
-    else:
-        st.sidebar.write("No valid final_date in the current filtered data.")
+available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
+if not available_dates.empty:
+    min_date = available_dates.min().date()
+    max_date = available_dates.max().date()
+    date_range = st.sidebar.date_input("Select Date Range", value=(min_date, max_date))
+    if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+        start_date, end_date = date_range
+        mask = (pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date) & \
+               (pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date)
+        filtered_df = filtered_df[mask]
 else:
-    st.sidebar.write("Column 'final_date' does not exist in the data.")
+    st.sidebar.write("No valid final_date in the current filtered data.")
 
 st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
 
@@ -109,9 +99,7 @@ with tabs[0]:
             st.warning("No data for the selected test.")
         else:
             fig_ts = go.Figure()
-            # Cho phép chọn Group by Supplier (RM/PG)
             group_supplier_ts = st.checkbox("Group by Supplier (RM/PG)", value=False)
-
             if group_supplier_ts:
                 for sup in ts_data["supplier_name"].dropna().unique():
                     sup_data = ts_data[ts_data["supplier_name"] == sup]
@@ -128,14 +116,12 @@ with tabs[0]:
                     mode="lines+markers",
                     name="Actual Result"
                 ))
-
             fig_ts.update_layout(
                 title=f"Time Series - {selected_test_ts}",
                 xaxis_title="Date",
                 yaxis_title="Actual Result",
                 showlegend=True
             )
-            # Buộc trục X là date
             fig_ts.update_xaxes(type='date')
             st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -159,16 +145,12 @@ with tabs[1]:
                 mode="lines+markers",
                 name="Actual Result"
             ))
-
-            # Thêm LSL/USL nếu có
             lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns else None
             usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns else None
-
             if lsl_val is not None:
                 fig_spc.add_hline(y=lsl_val, line_dash="dash", line_color="red", annotation_text="LSL")
             if usl_val is not None:
                 fig_spc.add_hline(y=usl_val, line_dash="dash", line_color="red", annotation_text="USL")
-
             fig_spc.update_layout(
                 title=f"SPC Chart - {selected_test_spc}",
                 xaxis_title="Date",
@@ -177,8 +159,6 @@ with tabs[1]:
             )
             fig_spc.update_xaxes(type='date')
             st.plotly_chart(fig_spc, use_container_width=True)
-
-            # Tính CP/CPK nếu có đủ giới hạn
             if (lsl_val is not None) and (usl_val is not None):
                 mean_val = spc_data["Actual result"].mean()
                 std_val = spc_data["Actual result"].std()
@@ -192,15 +172,11 @@ with tabs[1]:
 # ======================== TAB 3: BOXPLOT ============================
 with tabs[2]:
     st.header("Boxplot (RM/PG) by Supplier")
-
-    # Chỉ lấy RM, PG
     box_data = filtered_df[filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
     if box_data.empty:
         st.warning("No RM/PG data available.")
     else:
-        # Rút gọn supplier_name còn 3 ký tự đầu (nếu không rỗng)
         box_data["SupplierShort"] = box_data["supplier_name"].dropna().apply(lambda x: x[:3] if isinstance(x, str) else x)
-
         fig_box = px.box(
             box_data,
             x="SupplierShort",
@@ -228,48 +204,11 @@ with tabs[3]:
 # ======================== TAB 5: PARETO ============================
 with tabs[4]:
     st.header("Pareto Chart (Out-of-Spec)")
-    # Chọn nhóm hiển thị: Test description hoặc Spec description
     pareto_group_option = st.selectbox("Group by:", ["Test description", "Spec description"])
-
     temp_df = filtered_df.copy()
     if "Lower limit" in temp_df.columns and "Upper limit" in temp_df.columns:
         temp_df["LSL"] = temp_df["Lower limit"].apply(numeric_or_none)
         temp_df["USL"] = temp_df["Upper limit"].apply(numeric_or_none)
         temp_df["Act"] = temp_df["Actual result"].apply(numeric_or_none)
         temp_df["OutOfSpec"] = temp_df.apply(
-            lambda r: (r["Act"] is not None) and (r["LSL"] is not None) and (r["USL"] is not None)
-                      and (r["Act"] < r["LSL"] or r["Act"] > r["USL"]),
-            axis=1
-        )
-        pareto_df = temp_df[temp_df["OutOfSpec"] == True].copy()
-        if pareto_df.empty:
-            st.info("No out-of-spec samples found.")
-        else:
-            # Tính Pareto
-            grp_counts = pareto_df.groupby(pareto_group_option).size().reset_index(name="Count")
-            grp_counts = grp_counts.sort_values("Count", ascending=False)
-            grp_counts["Cumulative"] = grp_counts["Count"].cumsum()
-            grp_counts["Cumulative %"] = 100 * grp_counts["Cumulative"] / grp_counts["Count"].sum()
-
-            fig_pareto = go.Figure()
-            fig_pareto.add_trace(go.Bar(
-                x=grp_counts[pareto_group_option],
-                y=grp_counts["Count"],
-                name="Count"
-            ))
-            fig_pareto.add_trace(go.Scatter(
-                x=grp_counts[pareto_group_option],
-                y=grp_counts["Cumulative %"],
-                name="Cumulative %",
-                yaxis="y2",
-                mode="lines+markers"
-            ))
-            fig_pareto.update_layout(
-                title="Pareto Chart - Out-of-Spec",
-                xaxis_title=pareto_group_option,
-                yaxis=dict(title="Count"),
-                yaxis2=dict(title="Cumulative %", overlaying="y", side="right", range=[0, 110])
-            )
-            st.plotly_chart(fig_pareto, use_container_width=True)
-    else:
-        st.warning("Missing 'Lower limit' or 'Upper limit' columns. Cannot compute out-of-spec.")
+            lambda r: (r["Act"] is not None) and (r["LSL"] is not None) and (r["USL"] is
