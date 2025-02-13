@@ -24,36 +24,31 @@ def get_google_sheet_data(spreadsheet_id):
     
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
     
-    try:
-        creds = Credentials.from_service_account_info(
-            credentials_dict,
-            scopes=scopes
-        )
+    creds = Credentials.from_service_account_info(
+        credentials_dict,
+        scopes=scopes
+    )
+    
+    service = build('sheets', 'v4', credentials=creds)
+    sheet = service.spreadsheets()
+    
+    # Get the sheet range dynamically
+    sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+    properties = sheet_metadata.get('sheets')[0].get('properties')
+    sheet_name = properties.get('title')
+    range_name = f'{sheet_name}!A:M'  # Adjust columns as needed
+    
+    result = sheet.values().get(
+        spreadsheetId=spreadsheet_id,
+        range=range_name
+    ).execute()
+    
+    values = result.get('values', [])
+    if not values:
+        raise ValueError("No data found in the sheet")
         
-        service = build('sheets', 'v4', credentials=creds)
-        sheet = service.spreadsheets()
-        
-        # Get the sheet range dynamically
-        sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-        properties = sheet_metadata.get('sheets')[0].get('properties')
-        sheet_name = properties.get('title')
-        range_name = f'{sheet_name}!A:M'  # Adjust columns as needed
-        
-        result = sheet.values().get(
-            spreadsheetId=spreadsheet_id,
-            range=range_name
-        ).execute()
-        
-        values = result.get('values', [])
-        if not values:
-            raise ValueError("No data found in the sheet")
-            
-        df = pd.DataFrame(values[1:], columns=values[0])
-        return df
-        
-    except Exception as e:
-        st.error(f"Error accessing Google Sheets: {str(e)}")
-        return None
+    df = pd.DataFrame(values[1:], columns=values[0])
+    return df
 
 def process_lot_dates(row):
     """
@@ -107,20 +102,13 @@ def prepare_data():
     Prepare data for analysis
     """
     try:
-        # Debug prints
-        print("Available secrets sections:", st.secrets.keys())
-        
-        # Extract spreadsheet ID from the URL in secrets
+        # Get spreadsheet ID from sheet URL
         sheet_url = st.secrets["sheet"]["url"]
         spreadsheet_id = sheet_url.split('/')[5]
-        print("Spreadsheet ID:", spreadsheet_id)
         
         # Get data from Google Sheets
         df = get_google_sheet_data(spreadsheet_id)
         
-        if df is None:
-            return None
-            
         # Convert Receipt Date to datetime
         df['Receipt Date'] = pd.to_datetime(df['Receipt Date'])
         
