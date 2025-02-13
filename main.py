@@ -1,147 +1,69 @@
-import os
-import glob
-import time
-from datetime import datetime, timedelta
-import pandas as pd
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-from gspread_dataframe import set_with_dataframe
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.common.exceptions import TimeoutException, WebDriverException
+import streamlit as st
+import plotly.graph_objects as go
+from data_processing import prepare_data
 
-def setup_chrome_options():
-    """Setup Chrome options for running in GitHub Actions"""
-    chrome_options = webdriver.ChromeOptions()
-    
-    # Basic Chrome settings
-    chrome_options.add_argument('--headless=new')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    
-    # Network and timeout settings
-    chrome_options.add_argument('--dns-prefetch-disable')
-    chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--proxy-server="direct://"')
-    chrome_options.add_argument('--proxy-bypass-list=*')
-    
-    # SSL and security settings
-    chrome_options.add_argument('--ignore-certificate-errors')
-    chrome_options.add_argument('--allow-insecure-localhost')
-    chrome_options.add_argument('--allow-running-insecure-content')
-    
-    # Performance settings
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_argument('--disable-infobars')
-    chrome_options.page_load_strategy = 'normal'
-    
-    # Additional preferences
-    prefs = {
-        'download.default_directory': os.getcwd(),
-        'download.prompt_for_download': False,
-        'download.directory_upgrade': True,
-        'safebrowsing.enabled': True,
-        'profile.default_content_setting_values.automatic_downloads': 1
-    }
-    chrome_options.add_experimental_option('prefs', prefs)
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-logging'])
-    
-    return chrome_options
+# Configuration
+st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
-def create_driver():
-    """Create and configure WebDriver with appropriate timeouts"""
-    print("Initializing Chrome WebDriver...")
-    service = Service(ChromeDriverManager().install())
-    options = setup_chrome_options()
-    
-    driver = webdriver.Chrome(service=service, options=options)
-    
-    # Set various timeouts
-    driver.set_script_timeout(30)
-    driver.set_page_load_timeout(60)
-    
-    # Set window size
-    driver.set_window_size(1920, 1080)
-    
-    return driver
+# Google Sheets configuration
+SPREADSHEET_ID = 'your_spreadsheet_id'  # You'll need to update this
+RANGE_NAME = 'Sheet1!A:M'  # Update this based on your sheet's range
 
-def safe_get_url(driver, url, max_retries=3):
-    """Safely navigate to URL with retries"""
-    for attempt in range(max_retries):
-        try:
-            print(f"Attempting to access {url} (attempt {attempt + 1}/{max_retries})")
-            driver.get(url)
-            return True
-        except TimeoutException:
-            print(f"Timeout on attempt {attempt + 1}")
-            if attempt < max_retries - 1:
-                print("Refreshing driver and retrying...")
-                driver.execute_script("window.stop();")
-                time.sleep(5)
-            else:
-                raise
-        except WebDriverException as e:
-            print(f"WebDriver error on attempt {attempt + 1}: {str(e)}")
-            if attempt < max_retries - 1:
-                time.sleep(5)
-            else:
-                raise
+# Load data
+@st.cache_data(ttl=3600)  # Cache for 1 hour
+def load_data():
+    return prepare_data(SPREADSHEET_ID, RANGE_NAME)
 
-def main():
-    driver = None
-    try:
-        print("Starting the script...")
+try:
+    df = load_data()
+    
+    # Sidebar filters
+    st.sidebar.header('Filters')
+    
+    # Test description filter
+    test_descriptions = sorted(df['Test description'].unique())
+    selected_test = st.sidebar.selectbox(
+        'Select Test Description',
+        options=test_descriptions
+    )
+    
+    # Main content
+    st.title('Quality Control Dashboard')
+    
+    # Filter data for selected test
+    test_data = df[df['Test description'] == selected_test].copy()
+    
+    if len(test_data) > 0:
+        # Create line chart
+        fig = go.Figure()
         
-        # Initialize WebDriver
-        driver = create_driver()
-        print("WebDriver initialized successfully")
+        # Add actual results
+        fig.add_trace(go.Scatter(
+            x=test_data['warehouse_date'],
+            y=test_data['Actual result'],
+            mode='lines+markers',
+            name='Actual Result'
+        ))
         
-        # Access the website
-        print("Attempting to access website...")
-        site_url = "https://qlone.masancloud.com/sample-report.html"
-        if not safe_get_url(driver, site_url):
-            raise Exception("Failed to access the website after maximum retries")
+        # Add limit lines if they exist
+        if 'Lower limit' in test_data.columns and 'Upper limit' in test_data.columns:
+            lsl = test_data['Lower limit'].iloc[0]
+            usl = test_data['Upper limit'].iloc[0]
+            
+            if pd.notnull(lsl):
+                fig.add_hline(y=lsl, line_dash="dash", line_color="red", name="LSL")
+            if pd.notnull(usl):
+                fig.add_hline(y=usl, line_dash="dash", line_color="red", name="USL")
         
-        print("Successfully accessed the website")
-        time.sleep(5)  # Give some time for the page to stabilize
-        
-        # Login process
-        print("Starting login process...")
-        username_field = WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.NAME, "username"))
+        fig.update_layout(
+            title=f"{selected_test} Results Over Time",
+            xaxis_title="Date",
+            yaxis_title="Result",
+            showlegend=True
         )
-        password_field = driver.find_element(By.NAME, "password")
         
-        username_field.clear()
-        password_field.clear()
-        time.sleep(1)
+        st.plotly_chart(fig, use_container_width=True)
         
-        username_field.send_keys(os.environ['USERNAME'])
-        time.sleep(1)
-        password_field.send_keys(os.environ['PASSWORD'])
-        time.sleep(1)
-        
-        login_button = driver.find_element(By.XPATH, "//input[@type='submit' and @value='Login']")
-        login_button.click()
-        print("Login credentials submitted")
-        
-        # Rest of your existing code for site selection, date setting, etc.
-        # [Previous implementation continues here...]
-        
-    except Exception as e:
-        print(f"Error occurred: {str(e)}")
-        if driver:
-            print("Current page source:", driver.page_source)
-        raise
-    finally:
-        if driver:
-            driver.quit()
-
-if __name__ == "__main__":
-    main()
+except Exception as e:
+    st.error(f"Error loading data: {str(e)}")
+    st.error("Please check your Google Sheets configuration and credentials.")
