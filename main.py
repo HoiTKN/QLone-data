@@ -7,7 +7,7 @@ from data_processing import prepare_data
 # Cấu hình trang
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
-# Load dữ liệu, cache 1 giờ
+# Hàm load dữ liệu (cache 1 giờ)
 @st.cache_data(ttl=3600)
 def load_data():
     return prepare_data()
@@ -57,36 +57,17 @@ filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec de
 # 4) Test description
 filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
 
+# 5) Sample Type
+filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
+
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
-# -------------------------- XÁC ĐỊNH CỘT NGÀY ---------------------- #
-unique_stypes = filtered_df["Sample Type"].dropna().unique()
-rm_pg_set = {"RM - Raw material", "PG - Packaging"}
-
-if len(unique_stypes) == 0:
-    # Không có sample type -> tạm mặc định supplier_date
-    date_field_mode = "supplier_date"
-elif set(unique_stypes).issubset(rm_pg_set):
-    # Tất cả đều là RM hoặc PG
-    st.sidebar.markdown("---")
-    st.sidebar.subheader("Date Field for RM/PG")
-    date_choice = st.sidebar.radio(
-        "Chọn loại ngày để phân tích",
-        ("Ngày nhập kho (warehouse_date)", "NSX của NCC (supplier_date)"),
-    )
-    date_field_mode = "warehouse_date" if "nhập kho" in date_choice.lower() else "supplier_date"
-else:
-    # Mix hoặc IP/FG => dùng supplier_date
-    st.sidebar.info("Mixed or non-RM/PG sample types detected. Using supplier_date.")
-    date_field_mode = "supplier_date"
-
-# --------------------- CHỌN KHOẢNG THỜI GIAN ---------------------- #
+# --------------------- CHỌN KHOẢNG THỜI GIAN (final_date) ---------------------- #
 st.sidebar.markdown("---")
-st.sidebar.subheader("Date Range Filter")
+st.sidebar.subheader("Date Range Filter (Based on final_date)")
 
-if date_field_mode in filtered_df.columns:
-    # Chuyển cột date_field_mode sang datetime, lọc bỏ NaT
-    available_dates = pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dropna()
+if "final_date" in filtered_df.columns:
+    available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
     if not available_dates.empty:
         min_date = available_dates.min().date()
         max_date = available_dates.max().date()
@@ -97,17 +78,17 @@ if date_field_mode in filtered_df.columns:
         )
         if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
             start_date, end_date = date_range
-            # Lọc
+            # Lọc theo final_date
             mask = (
-                pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dt.date >= start_date
+                pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date
             ) & (
-                pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dt.date <= end_date
+                pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date
             )
             filtered_df = filtered_df[mask]
     else:
-        st.sidebar.write("No valid dates in the selected date field.")
+        st.sidebar.write("No valid final_date in the current filtered data.")
 else:
-    st.sidebar.write(f"Column '{date_field_mode}' does not exist in the data.")
+    st.sidebar.write("Column 'final_date' does not exist in the data.")
 
 st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
 
@@ -128,20 +109,21 @@ with tabs[0]:
             st.warning("No data for the selected test.")
         else:
             fig_ts = go.Figure()
+            # Cho phép chọn Group by Supplier (RM/PG)
             group_supplier_ts = st.checkbox("Group by Supplier (RM/PG)", value=False)
 
             if group_supplier_ts:
                 for sup in ts_data["supplier_name"].dropna().unique():
                     sup_data = ts_data[ts_data["supplier_name"] == sup]
                     fig_ts.add_trace(go.Scatter(
-                        x=sup_data[date_field_mode],
+                        x=sup_data["final_date"],
                         y=sup_data["Actual result"],
                         mode="lines+markers",
                         name=f"Supplier {sup}"
                     ))
             else:
                 fig_ts.add_trace(go.Scatter(
-                    x=ts_data[date_field_mode],
+                    x=ts_data["final_date"],
                     y=ts_data["Actual result"],
                     mode="lines+markers",
                     name="Actual Result"
@@ -153,7 +135,7 @@ with tabs[0]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
-            # Bắt buộc trục X là date
+            # Buộc trục X là date
             fig_ts.update_xaxes(type='date')
             st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -172,7 +154,7 @@ with tabs[1]:
         else:
             fig_spc = go.Figure()
             fig_spc.add_trace(go.Scatter(
-                x=spc_data[date_field_mode],
+                x=spc_data["final_date"],
                 y=spc_data["Actual result"],
                 mode="lines+markers",
                 name="Actual Result"
