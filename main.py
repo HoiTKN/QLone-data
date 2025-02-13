@@ -7,7 +7,7 @@ from data_processing import prepare_data
 # Cấu hình trang
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
-# Tải dữ liệu, cache 1 giờ
+# Load dữ liệu, cache 1 giờ
 @st.cache_data(ttl=3600)
 def load_data():
     return prepare_data()
@@ -17,13 +17,11 @@ if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
-# ---------------------------------------------------------------------
-# HÀM TIỆN ÍCH
-# ---------------------------------------------------------------------
+# -------------------------- HÀM TIỆN ÍCH -------------------------- #
 def apply_multiselect_filter(df, col_name, label):
     """
     Trả về df đã được lọc dựa trên các giá trị người dùng chọn trong multiselect.
-    Nếu người dùng không chọn gì -> không lọc.
+    Nếu người dùng không chọn gì -> không lọc (lấy tất cả).
     """
     if col_name not in df.columns:
         return df  # cột không tồn tại, bỏ qua
@@ -36,15 +34,13 @@ def apply_multiselect_filter(df, col_name, label):
         return df  # user chưa chọn gì -> giữ nguyên
 
 def numeric_or_none(val):
-    """Chuyển val về số (float) nếu được, ngược lại None."""
+    """Chuyển val về float nếu được, ngược lại None."""
     try:
         return float(val)
     except:
         return None
 
-# ---------------------------------------------------------------------
-# PHẦN FILTERS TRONG SIDEBAR
-# ---------------------------------------------------------------------
+# -------------------------- SIDEBAR FILTERS ------------------------ #
 st.sidebar.title("Filters")
 
 filtered_df = df.copy()
@@ -66,15 +62,10 @@ filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type"
 
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
-# ---------------------------------------------------------------------
-# XÁC ĐỊNH CÁCH CHỌN CỘT NGÀY
-# ---------------------------------------------------------------------
-# Kiểm tra Sample Type sau khi lọc
+# -------------------------- XÁC ĐỊNH CỘT NGÀY ---------------------- #
 unique_stypes = filtered_df["Sample Type"].dropna().unique()
 rm_pg_set = {"RM - Raw material", "PG - Packaging"}
 
-# Nếu toàn bộ sample type đều là RM/PG -> cho user chọn cột ngày
-# Nếu có mix (RM/PG + IP/FG/khác) hoặc toàn IP/FG -> dùng supplier_date
 if len(unique_stypes) == 0:
     # Không có sample type -> tạm mặc định supplier_date
     date_field_mode = "supplier_date"
@@ -88,19 +79,47 @@ elif set(unique_stypes).issubset(rm_pg_set):
     )
     date_field_mode = "warehouse_date" if "nhập kho" in date_choice.lower() else "supplier_date"
 else:
-    # Trường hợp mix hoặc IP/FG => chỉ có 1 date => supplier_date
+    # Mix hoặc IP/FG => dùng supplier_date
     st.sidebar.info("Mixed or non-RM/PG sample types detected. Using supplier_date.")
     date_field_mode = "supplier_date"
 
-# ---------------------------------------------------------------------
-# TẠO CÁC TAB HIỂN THỊ
-# ---------------------------------------------------------------------
+# --------------------- CHỌN KHOẢNG THỜI GIAN ---------------------- #
+st.sidebar.markdown("---")
+st.sidebar.subheader("Date Range Filter")
+
+if date_field_mode in filtered_df.columns:
+    # Chuyển cột date_field_mode sang datetime, lọc bỏ NaT
+    available_dates = pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dropna()
+    if not available_dates.empty:
+        min_date = available_dates.min().date()
+        max_date = available_dates.max().date()
+        # Chọn khoảng ngày
+        date_range = st.sidebar.date_input(
+            "Select Date Range",
+            value=(min_date, max_date)
+        )
+        if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
+            start_date, end_date = date_range
+            # Lọc
+            mask = (
+                pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dt.date >= start_date
+            ) & (
+                pd.to_datetime(filtered_df[date_field_mode], errors='coerce').dt.date <= end_date
+            )
+            filtered_df = filtered_df[mask]
+    else:
+        st.sidebar.write("No valid dates in the selected date field.")
+else:
+    st.sidebar.write(f"Column '{date_field_mode}' does not exist in the data.")
+
+st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
+
+# --------------------- TẠO CÁC TAB HIỂN THỊ ----------------------- #
 tabs = st.tabs(["Time Series", "SPC Chart", "Boxplot", "Distribution", "Pareto Chart"])
 
 # ======================== TAB 1: TIME SERIES =========================
 with tabs[0]:
     st.header("Time Series Chart")
-    # Chọn 1 test để vẽ
     tests_ts = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_ts:
         st.warning("No 'Test description' available in the filtered data.")
@@ -112,11 +131,9 @@ with tabs[0]:
             st.warning("No data for the selected test.")
         else:
             fig_ts = go.Figure()
-            # Người dùng có thể muốn group theo supplier_name hay không
             group_supplier_ts = st.checkbox("Group by Supplier (RM/PG)", value=False)
 
             if group_supplier_ts:
-                # Vẽ từng supplier_name
                 for sup in ts_data["supplier_name"].dropna().unique():
                     sup_data = ts_data[ts_data["supplier_name"] == sup]
                     fig_ts.add_trace(go.Scatter(
@@ -139,6 +156,8 @@ with tabs[0]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
+            # Bắt buộc trục X là date
+            fig_ts.update_xaxes(type='date')
             st.plotly_chart(fig_ts, use_container_width=True)
 
 # ======================== TAB 2: SPC CHART ===========================
@@ -161,6 +180,7 @@ with tabs[1]:
                 mode="lines+markers",
                 name="Actual Result"
             ))
+
             # Thêm LSL/USL nếu có
             lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns else None
             usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns else None
@@ -176,6 +196,7 @@ with tabs[1]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
+            fig_spc.update_xaxes(type='date')
             st.plotly_chart(fig_spc, use_container_width=True)
 
             # Tính CP/CPK nếu có đủ giới hạn
@@ -273,4 +294,3 @@ with tabs[4]:
             st.plotly_chart(fig_pareto, use_container_width=True)
     else:
         st.warning("Missing 'Lower limit' or 'Upper limit' columns. Cannot compute out-of-spec.")
-
