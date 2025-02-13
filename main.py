@@ -15,7 +15,7 @@ if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
-# Debug: Kiểm tra cột final_date
+# Đảm bảo cột final_date tồn tại
 if "final_date" not in df.columns:
     st.error("Column 'final_date' does not exist. Check data_processing.py!")
     st.stop()
@@ -74,7 +74,6 @@ tabs = st.tabs(["Time Series", "SPC Chart", "Boxplot", "Distribution", "Pareto C
 with tabs[0]:
     st.header("Time Series Chart")
 
-    # Chọn Test
     tests_ts = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_ts:
         st.warning("No 'Test description' available.")
@@ -99,8 +98,8 @@ with tabs[0]:
                         x=sup_data["final_date"],
                         y=sup_data["Actual result"],
                         mode="lines+markers",
-                        line_shape="spline",          # đường cong mềm
-                        connectgaps=False,            # không nối các điểm trống
+                        line_shape="spline",
+                        connectgaps=False,
                         name=f"Supplier {sup}"
                     ))
             else:
@@ -119,7 +118,11 @@ with tabs[0]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
-            fig_ts.update_xaxes(type='date')
+            # Chỉ lấy ngày (không giờ)
+            fig_ts.update_xaxes(
+                type='date',
+                tickformat='%Y-%m-%d'   # hoặc '%d-%m-%Y' nếu muốn ngày-tháng-năm
+            )
             st.plotly_chart(fig_ts, use_container_width=True)
 
 # ================= TAB 2: SPC CHART ================= #
@@ -149,7 +152,6 @@ with tabs[1]:
                 name="Actual Result"
             ))
 
-            # Thêm LSL/USL nếu có
             lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns else None
             usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns else None
 
@@ -164,7 +166,10 @@ with tabs[1]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
-            fig_spc.update_xaxes(type='date')
+            fig_spc.update_xaxes(
+                type='date',
+                tickformat='%Y-%m-%d'
+            )
             st.plotly_chart(fig_spc, use_container_width=True)
 
             # Tính CP/CPK
@@ -178,20 +183,18 @@ with tabs[1]:
                 else:
                     st.write("Standard Deviation is zero, cannot compute CP/CPK.")
 
-# ================ TAB 3: BOXPLOT ================ #
+# ================= TAB 3: BOXPLOT ================= #
 with tabs[2]:
     st.header("Boxplot")
 
-    # Kiểm tra xem data có RM/PG không
+    # Chia data thành 2 nhóm: RM/PG vs. non-RM/PG
     rm_pg_data = filtered_df[filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
     non_rm_pg_data = filtered_df[~filtered_df["Sample Type"].isin(["RM - Raw material", "PG - Packaging"])].copy()
 
-    # Tạo 2 expanders để hiển thị hai kiểu boxplot khác nhau
     with st.expander("Boxplot for RM/PG by Supplier", expanded=False):
         if rm_pg_data.empty:
             st.info("No RM/PG data available.")
         else:
-            # Rút gọn supplier_name còn 3 ký tự
             rm_pg_data["SupplierShort"] = rm_pg_data["supplier_name"].dropna().apply(
                 lambda x: x[:3] if isinstance(x, str) else x
             )
@@ -208,11 +211,8 @@ with tabs[2]:
         if non_rm_pg_data.empty:
             st.info("No non-RM/PG data available.")
         else:
-            # Tạo cột Month từ final_date
             non_rm_pg_data["Month"] = pd.to_datetime(non_rm_pg_data["final_date"], errors='coerce').dt.to_period("M")
-            # Chuyển period -> string
             non_rm_pg_data["Month"] = non_rm_pg_data["Month"].astype(str)
-
             fig_box_non = px.box(
                 non_rm_pg_data,
                 x="Month",
@@ -222,7 +222,30 @@ with tabs[2]:
             )
             st.plotly_chart(fig_box_non, use_container_width=True)
 
-# ================ TAB 4: DISTRIBUTION ================ #
+    # Boxplot tổng hợp cho tất cả (MBP) theo tháng
+    with st.expander("Boxplot All Data (MBP) by Month", expanded=False):
+        if filtered_df.empty:
+            st.info("No data available for MBP boxplot.")
+        else:
+            all_mbp_data = filtered_df.copy()
+            # Tạo cột Month từ final_date
+            all_mbp_data["Month"] = pd.to_datetime(all_mbp_data["final_date"], errors='coerce').dt.to_period("M")
+            all_mbp_data["Month"] = all_mbp_data["Month"].astype(str)
+
+            # Tạo 1 cột 'Plant' = 'MBP' để x-axis chỉ có 1 cột
+            all_mbp_data["Plant"] = "MBP"
+
+            fig_box_mbp = px.box(
+                all_mbp_data,
+                x="Plant",           # Chỉ 1 nhóm: MBP
+                y="Actual result",
+                color="Month",       # Mỗi tháng 1 màu
+                points="all",
+                title="All Data (MBP) by Month"
+            )
+            st.plotly_chart(fig_box_mbp, use_container_width=True)
+
+# ================= TAB 4: DISTRIBUTION ================= #
 with tabs[3]:
     st.header("Distribution Chart of Actual Result")
     if filtered_df.empty:
@@ -237,7 +260,7 @@ with tabs[3]:
         )
         st.plotly_chart(fig_dist, use_container_width=True)
 
-# ================ TAB 5: PARETO ================ #
+# ================= TAB 5: PARETO ================= #
 with tabs[4]:
     st.header("Pareto Chart (Out-of-Spec)")
     pareto_group_option = st.selectbox("Group by:", ["Test description", "Spec description"])
