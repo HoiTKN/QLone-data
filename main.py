@@ -57,9 +57,6 @@ filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec de
 # 4) Test description
 filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
 
-# 5) Sample Type
-filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
-
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
 # -------------------------- XÁC ĐỊNH CỘT NGÀY ---------------------- #
