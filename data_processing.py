@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import json
 import streamlit as st
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
@@ -9,35 +8,52 @@ def get_google_sheet_data(spreadsheet_id):
     """
     Connect to Google Sheets and get data using Streamlit secrets
     """
-    # Create credentials from Streamlit secrets
-    credentials_dict = json.loads(st.secrets["GOOGLE_CREDENTIALS"])
+    # Create credentials dict from gcp_service_account section
+    credentials_dict = {
+        "type": st.secrets["gcp_service_account"]["type"],
+        "project_id": st.secrets["gcp_service_account"]["project_id"],
+        "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
+        "private_key": st.secrets["gcp_service_account"]["private_key"],
+        "client_email": st.secrets["gcp_service_account"]["client_email"],
+        "client_id": st.secrets["gcp_service_account"]["client_id"],
+        "auth_uri": st.secrets["gcp_service_account"]["auth_uri"],
+        "token_uri": st.secrets["gcp_service_account"]["token_uri"],
+        "auth_provider_x509_cert_url": st.secrets["gcp_service_account"]["auth_provider_x509_cert_url"],
+        "client_x509_cert_url": st.secrets["gcp_service_account"]["client_x509_cert_url"]
+    }
+    
     scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
     
-    creds = Credentials.from_service_account_info(
-        credentials_dict,
-        scopes=scopes
-    )
-    
-    service = build('sheets', 'v4', credentials=creds)
-    sheet = service.spreadsheets()
-    
-    # Get the sheet range dynamically
-    sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
-    properties = sheet_metadata.get('sheets')[0].get('properties')
-    sheet_name = properties.get('title')
-    range_name = f'{sheet_name}!A:M'  # Adjust columns as needed
-    
-    result = sheet.values().get(
-        spreadsheetId=spreadsheet_id,
-        range=range_name
-    ).execute()
-    
-    values = result.get('values', [])
-    if not values:
-        raise ValueError("No data found in the sheet")
+    try:
+        creds = Credentials.from_service_account_info(
+            credentials_dict,
+            scopes=scopes
+        )
         
-    df = pd.DataFrame(values[1:], columns=values[0])
-    return df
+        service = build('sheets', 'v4', credentials=creds)
+        sheet = service.spreadsheets()
+        
+        # Get the sheet range dynamically
+        sheet_metadata = service.spreadsheets().get(spreadsheetId=spreadsheet_id).execute()
+        properties = sheet_metadata.get('sheets')[0].get('properties')
+        sheet_name = properties.get('title')
+        range_name = f'{sheet_name}!A:M'  # Adjust columns as needed
+        
+        result = sheet.values().get(
+            spreadsheetId=spreadsheet_id,
+            range=range_name
+        ).execute()
+        
+        values = result.get('values', [])
+        if not values:
+            raise ValueError("No data found in the sheet")
+            
+        df = pd.DataFrame(values[1:], columns=values[0])
+        return df
+        
+    except Exception as e:
+        st.error(f"Error accessing Google Sheets: {str(e)}")
+        return None
 
 def process_lot_dates(row):
     """
@@ -92,19 +108,19 @@ def prepare_data():
     """
     try:
         # Debug prints
-        print("Available secrets keys:", st.secrets.keys())
+        print("Available secrets sections:", st.secrets.keys())
         
-        # Get spreadsheet ID from secrets
-        spreadsheet_id = st.secrets["SPREADSHEET_ID"]
+        # Extract spreadsheet ID from the URL in secrets
+        sheet_url = st.secrets["sheet"]["url"]
+        spreadsheet_id = sheet_url.split('/')[5]
         print("Spreadsheet ID:", spreadsheet_id)
-        
-        # Try to access credentials
-        credentials_str = st.secrets["GOOGLE_CREDENTIALS"]
-        print("Credentials found")
         
         # Get data from Google Sheets
         df = get_google_sheet_data(spreadsheet_id)
         
+        if df is None:
+            return None
+            
         # Convert Receipt Date to datetime
         df['Receipt Date'] = pd.to_datetime(df['Receipt Date'])
         
