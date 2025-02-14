@@ -3,8 +3,6 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
-import streamlit as st
-
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
 @st.cache_data(ttl=3600)
