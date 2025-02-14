@@ -3,6 +3,10 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
+import streamlit as st
+
+st.write("All secrets keys:", list(st.secrets.keys()))
+st.stop()
 
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
