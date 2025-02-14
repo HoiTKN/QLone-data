@@ -1,58 +1,29 @@
 import pandas as pd
 import numpy as np
 import streamlit as st
-from google.oauth2.service_account import Credentials
-from googleapiclient.discovery import build
+from google.cloud import bigquery
 
-def get_google_sheet_data(spreadsheet_id):
+def get_bigquery_data():
     """
-    Kết nối đến Google Sheets và lấy dữ liệu bằng cách sử dụng thông tin từ st.secrets.
+    Kết nối đến Google BigQuery và lấy dữ liệu bằng cách sử dụng thông tin từ st.secrets.
+    Yêu cầu st.secrets phải chứa:
+      - gcp_service_account: Thông tin xác thực của Service Account.
+      - bigquery.table: Tên bảng đầy đủ (project.dataset.table).
     """
-    credentials_dict = {
-        "type": st.secrets["gcp_service_account"]["type"],
-        "project_id": st.secrets["gcp_service_account"]["project_id"],
-        "private_key_id": st.secrets["gcp_service_account"]["private_key_id"],
-        "private_key": st.secrets["gcp_service_account"]["private_key"],
-        "client_email": st.secrets["gcp_service_account"]["client_email"],
-        "client_id": st.secrets["gcp_service_account"]["client_id"],
-        "auth_uri": st.secrets["gcp_service_account"]["auth_uri"],
-        "token_uri": st.secrets["gcp_service_account"]["token_uri"],
-        "auth_provider_x509_cert_url": st.secrets["gcp_service_account"]["auth_provider_x509_cert_url"],
-        "client_x509_cert_url": st.secrets["gcp_service_account"]["client_x509_cert_url"]
-    }
-
-    scopes = ['https://www.googleapis.com/auth/spreadsheets.readonly']
-
     try:
-        creds = Credentials.from_service_account_info(credentials_dict, scopes=scopes)
-        service = build('sheets', 'v4', credentials=creds)
-        sheet = service.spreadsheets()
-
-        # Lấy thông tin metadata của sheet để xác định tên sheet
-        sheet_metadata = sheet.get(spreadsheetId=spreadsheet_id).execute()
-        properties = sheet_metadata.get('sheets')[0].get('properties')
-        sheet_name = properties.get('title')
-        range_name = f'{sheet_name}!A:M'  # Điều chỉnh cột tùy nhu cầu
-
-        result = sheet.values().get(
-            spreadsheetId=spreadsheet_id,
-            range=range_name
-        ).execute()
-
-        values = result.get('values', [])
-        if not values:
-            raise ValueError("No data found in the sheet")
-
-        # Dòng đầu tiên là header, các dòng sau là dữ liệu
-        df = pd.DataFrame(values[1:], columns=values[0])
-        # Loại bỏ khoảng trắng thừa trong tên các cột
-        df.columns = df.columns.str.strip()
+        # Lấy thông tin credentials từ st.secrets
+        credentials_info = st.secrets["gcp_service_account"]
+        client = bigquery.Client.from_service_account_info(credentials_info)
+        
+        # Lấy tên bảng từ st.secrets
+        table = st.secrets["GOOGLE_BIGQUERY"]["table"]
+        query = f"SELECT * FROM `{table}`"
+        
+        df = client.query(query).to_dataframe()
         return df
-
     except Exception as e:
-        st.error(f"Error accessing Google Sheets: {str(e)}")
+        st.error(f"Error accessing BigQuery: {str(e)}")
         return None
-
 
 def parse_ddmmyy(s):
     """
@@ -68,17 +39,16 @@ def parse_ddmmyy(s):
     except:
         return None
 
-
 def process_lot_dates(row):
     """
     Tách ngày warehouse_date và supplier_date từ 'Lot number'.
 
     Quy ước:
-    - RM/PG: có 2 ngày. Ví dụ: '020125-KIB08-291224-MBP'
-      -> warehouse_date = 02/01/2025, supplier_date = 29/12/2024
-      -> supplier_name = 'KIB08' (nếu != 'MBP')
-    - IP/FG/GHP/...: chỉ có 1 ngày. Ví dụ: '020125-F2-MBP'
-      -> supplier_date = 02/01/2025, warehouse_date = None
+      - RM/PG: có 2 ngày. Ví dụ: '020125-KIB08-291224-MBP'
+        -> warehouse_date = 02/01/2025, supplier_date = 29/12/2024
+        -> supplier_name = 'KIB08' (nếu != 'MBP')
+      - IP/FG/GHP/...: chỉ có 1 ngày. Ví dụ: '020125-F2-MBP'
+        -> supplier_date = 02/01/2025, warehouse_date = None
     """
     lot_number = str(row.get('Lot number', '')).strip()
     sample_type = str(row.get('Sample Type', '')).strip().lower()
@@ -105,7 +75,6 @@ def process_lot_dates(row):
 
     return pd.Series([warehouse_date, supplier_date, supplier_name])
 
-
 def unify_date(row):
     """
     Trả về cột ngày thống nhất (final_date) cho mọi loại Sample:
@@ -124,25 +93,22 @@ def unify_date(row):
         else:
             return row["supplier_date"]
 
-
 def prepare_data():
     """
     Xử lý dữ liệu cho dashboard.
+    Lưu ý: Dữ liệu được lấy từ Google BigQuery thay vì Google Sheets.
     """
     try:
-        print("Available secrets sections:", st.secrets.keys())
-        sheet_url = st.secrets["sheet"]["url"]
-        spreadsheet_id = sheet_url.split('/')[5]
-        print("Spreadsheet ID:", spreadsheet_id)
-
-        df = get_google_sheet_data(spreadsheet_id)
+        # Lấy dữ liệu từ BigQuery
+        df = get_bigquery_data()
         if df is None:
             return None
 
+        # Nếu có cột "Receipt Date", chuyển đổi sang kiểu datetime
         if "Receipt Date" in df.columns:
             df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
 
-        # Tách các thông tin từ Lot number
+        # Tách thông tin từ "Lot number"
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
@@ -150,9 +116,10 @@ def prepare_data():
         # Tạo cột final_date thống nhất
         df["final_date"] = df.apply(unify_date, axis=1)
 
+        # Chuyển đổi "Actual result" sang dạng số, nếu có
         if "Actual result" in df.columns:
             df['Actual result'] = pd.to_numeric(
-                df['Actual result'].str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
+                df['Actual result'].astype(str).str.replace(',', '.').str.extract(r'(\d+\.?\d*)')[0],
                 errors='coerce'
             )
 
