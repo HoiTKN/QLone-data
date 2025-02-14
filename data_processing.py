@@ -128,3 +128,13 @@ def prepare_data():
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
         return None
+import streamlit as st
+from data_processing import get_bigquery_data
+
+df = get_bigquery_data()
+if df is not None:
+    st.write("Data loaded successfully from BigQuery:")
+    st.dataframe(df.head())
+else:
+    st.error("Failed to load data from BigQuery.")
+
