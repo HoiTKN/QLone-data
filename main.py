@@ -1,33 +1,43 @@
-import pandas as pd
 import streamlit as st
+import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
+
+# Đặt cấu hình trang ngay sau import Streamlit
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
 @st.cache_data(ttl=3600)
 def load_data():
     return prepare_data()
 
+# Tải dữ liệu
 df = load_data()
 if df is None:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
-# Đảm bảo cột final_date tồn tại
+# Kiểm tra cột final_date
 if "final_date" not in df.columns:
     st.error("Column 'final_date' does not exist. Check data_processing.py!")
     st.stop()
 
+# Debug: In thông tin về final_date
+st.write("Data loaded successfully from BigQuery!")
+st.write("Min final_date:", df["final_date"].min())
+st.write("Max final_date:", df["final_date"].max())
+
+###################### HÀM HỖ TRỢ ######################
 def apply_multiselect_filter(df, col_name, label):
+    """
+    Tạo multiselect filter cho cột col_name.
+    Mặc định chọn tất cả giá trị để thân thiện với người dùng.
+    """
     if col_name not in df.columns:
         return df
     all_vals = sorted(df[col_name].dropna().unique())
-    selected_vals = st.sidebar.multiselect(label, options=all_vals)
-    if selected_vals:
-        return df[df[col_name].isin(selected_vals)]
-    else:
-        return df
+    selected_vals = st.multiselect(label, options=all_vals, default=all_vals)
+    return df[df[col_name].isin(selected_vals)]
 
 def numeric_or_none(val):
     try:
@@ -35,38 +45,50 @@ def numeric_or_none(val):
     except:
         return None
 
-# ------------------ SIDEBAR FILTERS ------------------ #
+###################### SIDEBAR FILTERS ######################
 st.sidebar.title("Filters")
 
 filtered_df = df.copy()
-filtered_df = apply_multiselect_filter(filtered_df, "Category description", "Category description")
-filtered_df = apply_multiselect_filter(filtered_df, "Spec category", "Spec category")
-filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec description")
-filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
-filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
 
+# Gom các filter vào 1 expander để gọn gàng
+with st.sidebar.expander("Filter Options", expanded=True):
+    filtered_df = apply_multiselect_filter(filtered_df, "Category description", "Category description")
+    filtered_df = apply_multiselect_filter(filtered_df, "Spec category", "Spec category")
+    filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec description")
+    filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
+    filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
+
+# Thống kê số dòng sau khi filter cột
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
-# -------------- DATE RANGE FILTER (final_date) -------------- #
+# -------------- DATE RANGE FILTER (final_date) --------------
 st.sidebar.markdown("---")
-st.sidebar.subheader("Date Range Filter (Based on final_date)")
+st.sidebar.subheader("Date Range Filter (final_date)")
 
+# Lấy ra cột final_date dạng datetime
 available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
 if not available_dates.empty:
     min_date = available_dates.min().date()
     max_date = available_dates.max().date()
+    # Hiển thị cho người dùng biết khoảng thời gian có sẵn
+    st.sidebar.write(f"Data range in dataset: {min_date} -> {max_date}")
+
+    # Tạo date_input với giá trị mặc định là (min_date, max_date)
     date_range = st.sidebar.date_input("Select Date Range", value=(min_date, max_date))
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         start_date, end_date = date_range
-        mask = (pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date) & \
-               (pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date)
+        mask = (
+            pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date
+        ) & (
+            pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date
+        )
         filtered_df = filtered_df[mask]
 else:
     st.sidebar.write("No valid final_date in the current filtered data.")
 
 st.sidebar.markdown(f"**Total records after date filter**: {len(filtered_df)}")
 
-# ------------------ TABS ------------------ #
+###################### TABS ######################
 tabs = st.tabs(["Time Series", "SPC Chart", "Boxplot", "Distribution", "Pareto Chart"])
 
 # ================= TAB 1: TIME SERIES ================= #
@@ -75,7 +97,7 @@ with tabs[0]:
 
     tests_ts = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_ts:
-        st.warning("No 'Test description' available.")
+        st.warning("No 'Test description' available. (Possibly no data for your filters.)")
     else:
         selected_test_ts = st.selectbox("Select Test for Time Series", options=tests_ts)
         ts_data = filtered_df[filtered_df["Test description"] == selected_test_ts].copy()
@@ -120,7 +142,7 @@ with tabs[0]:
             # Chỉ lấy ngày (không giờ)
             fig_ts.update_xaxes(
                 type='date',
-                tickformat='%Y-%m-%d'   # hoặc '%d-%m-%Y' nếu muốn ngày-tháng-năm
+                tickformat='%Y-%m-%d'
             )
             st.plotly_chart(fig_ts, use_container_width=True)
 
@@ -130,7 +152,7 @@ with tabs[1]:
 
     tests_spc = sorted(filtered_df["Test description"].dropna().unique())
     if not tests_spc:
-        st.warning("No 'Test description' available.")
+        st.warning("No 'Test description' available. (Possibly no data for your filters.)")
     else:
         selected_test_spc = st.selectbox("Select Test for SPC", options=tests_spc)
         spc_data = filtered_df[filtered_df["Test description"] == selected_test_spc].copy()
@@ -138,7 +160,6 @@ with tabs[1]:
         if spc_data.empty:
             st.warning("No data for the selected test.")
         else:
-            # Sắp xếp theo final_date
             spc_data.sort_values(by="final_date", inplace=True)
 
             fig_spc = go.Figure()
@@ -192,7 +213,7 @@ with tabs[2]:
 
     with st.expander("Boxplot for RM/PG by Supplier", expanded=False):
         if rm_pg_data.empty:
-            st.info("No RM/PG data available.")
+            st.info("No RM/PG data available for this filter.")
         else:
             rm_pg_data["SupplierShort"] = rm_pg_data["supplier_name"].dropna().apply(
                 lambda x: x[:3] if isinstance(x, str) else x
@@ -208,7 +229,7 @@ with tabs[2]:
 
     with st.expander("Boxplot for Non-RM/PG (IP, FG...) by Month", expanded=False):
         if non_rm_pg_data.empty:
-            st.info("No non-RM/PG data available.")
+            st.info("No non-RM/PG data available for this filter.")
         else:
             non_rm_pg_data["Month"] = pd.to_datetime(non_rm_pg_data["final_date"], errors='coerce').dt.to_period("M")
             non_rm_pg_data["Month"] = non_rm_pg_data["Month"].astype(str)
@@ -221,24 +242,20 @@ with tabs[2]:
             )
             st.plotly_chart(fig_box_non, use_container_width=True)
 
-    # Boxplot tổng hợp cho tất cả (MBP) theo tháng
     with st.expander("Boxplot All Data (MBP) by Month", expanded=False):
         if filtered_df.empty:
             st.info("No data available for MBP boxplot.")
         else:
             all_mbp_data = filtered_df.copy()
-            # Tạo cột Month từ final_date
             all_mbp_data["Month"] = pd.to_datetime(all_mbp_data["final_date"], errors='coerce').dt.to_period("M")
             all_mbp_data["Month"] = all_mbp_data["Month"].astype(str)
-
-            # Tạo 1 cột 'Plant' = 'MBP' để x-axis chỉ có 1 cột
             all_mbp_data["Plant"] = "MBP"
 
             fig_box_mbp = px.box(
                 all_mbp_data,
-                x="Plant",           # Chỉ 1 nhóm: MBP
+                x="Plant",
                 y="Actual result",
-                color="Month",       # Mỗi tháng 1 màu
+                color="Month",
                 points="all",
                 title="All Data (MBP) by Month"
             )
