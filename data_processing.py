@@ -108,11 +108,6 @@ def unify_date(row):
 def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
     """
     Loại bỏ các outlier khỏi DataFrame dựa trên cột chỉ định.
-    - df: DataFrame đầu vào
-    - column: tên cột numeric để xác định outlier (mặc định là 'Actual result')
-    - method: phương pháp xác định outlier (mặc định dùng IQR)
-    - factor: hệ số nhân cho IQR, mặc định là 1.5
-
     Trả về:
       - df_cleaned: DataFrame đã loại bỏ outlier
       - df_outliers: DataFrame chứa các hàng bị coi là outlier
@@ -125,20 +120,17 @@ def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
         return df, pd.DataFrame()
 
     if method == 'IQR':
-        # Tính Q1, Q3
         Q1 = df[column].quantile(0.25)
         Q3 = df[column].quantile(0.75)
         IQR = Q3 - Q1
         lower_bound = Q1 - factor * IQR
         upper_bound = Q3 + factor * IQR
     else:
-        # Nếu muốn dùng std-based
         mean_val = df[column].mean()
         std_val = df[column].std()
         lower_bound = mean_val - factor * std_val
         upper_bound = mean_val + factor * std_val
 
-    # Tách ra 2 DataFrame: outlier và clean
     df_outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
     df_cleaned = df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
 
@@ -147,34 +139,27 @@ def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
 def prepare_data():
     """
     Chuẩn bị dữ liệu cho dashboard:
-      - Lấy dữ liệu từ BigQuery (chỉ lấy 14 cột cần thiết).
-      - Nếu có cột "Receipt Date", chuyển đổi sang kiểu datetime với dayfirst=True và infer_datetime_format=True.
-      - Xử lý cột "Lot number" để tạo ra các cột phụ: warehouse_date, supplier_date, supplier_name.
+      - Lấy dữ liệu từ BigQuery (chỉ 14 cột cần thiết).
+      - Chuyển đổi "Receipt Date" sang datetime.
+      - Xử lý "Lot number" để tạo cột phụ: warehouse_date, supplier_date, supplier_name.
       - Tạo cột 'final_date' thống nhất.
-      - Chuyển đổi "Actual result" sang dạng số (numeric).
-      - Loại bỏ outlier (nếu có) và trả về hai DataFrame: clean & outliers.
+      - Chuyển "Actual result" sang numeric.
+      - Loại bỏ outlier (IQR).
     """
     try:
         df = get_bigquery_data()
         if df is None or df.empty:
             return None, None
 
-        # Chuyển đổi "Receipt Date" nếu có
         if "Receipt Date" in df.columns:
-            df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], 
-                                                errors='coerce', 
-                                                dayfirst=True, 
-                                                infer_datetime_format=True)
+            df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True, infer_datetime_format=True)
 
-        # Xử lý "Lot number" để lấy thông tin bổ sung
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
 
-        # Tạo cột 'final_date'
         df["final_date"] = df.apply(unify_date, axis=1)
 
-        # Chuyển đổi "Actual result" sang dạng số
         if "Actual result" in df.columns:
             df['Actual result'] = pd.to_numeric(
                 df['Actual result'].astype(str)
@@ -183,7 +168,6 @@ def prepare_data():
                 errors='coerce'
             )
 
-        # Loại bỏ outlier (nếu cần)
         df_cleaned, df_outliers = remove_outliers(df, column='Actual result', method='IQR', factor=1.5)
 
         return df_cleaned, df_outliers
