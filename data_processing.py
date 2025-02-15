@@ -40,7 +40,8 @@ def process_lot_dates(row):
     """
     Tách thông tin từ cột 'Lot number' để lấy ra:
       - warehouse_date: ngày kho (ví dụ: '02/01/2025' trong RM/PG)
-      - supplier_date: ngày của nhà cung cấp (ví dụ: '29/12/2024' trong RM/PG, hoặc chỉ có một ngày cho IP/FG/GHP)
+      - supplier_date: ngày của nhà cung cấp (ví dụ: '29/12/2024' trong RM/PG, 
+        hoặc chỉ có một ngày cho IP/FG/GHP)
       - supplier_name: tên nhà cung cấp (nếu có, ví dụ: 'KIB08' nếu khác 'MBP')
     """
     lot_number = str(row.get('Lot number', '')).strip()
@@ -82,6 +83,45 @@ def unify_date(row):
         else:
             return row["supplier_date"]
 
+def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
+    """
+    Loại bỏ các outlier khỏi DataFrame dựa trên cột chỉ định.
+    - df: DataFrame đầu vào
+    - column: tên cột numeric để xác định outlier (mặc định là 'Actual result')
+    - method: phương pháp xác định outlier (mặc định dùng IQR)
+    - factor: hệ số nhân cho IQR, mặc định là 1.5
+
+    Trả về:
+      - df_cleaned: DataFrame đã loại bỏ outlier
+      - df_outliers: DataFrame chứa các hàng bị coi là outlier
+    """
+    if df is None or df.empty or column not in df.columns:
+        return df, pd.DataFrame()
+
+    # Đảm bảo cột là numeric
+    if not pd.api.types.is_numeric_dtype(df[column]):
+        return df, pd.DataFrame()
+
+    if method == 'IQR':
+        # Tính Q1, Q3
+        Q1 = df[column].quantile(0.25)
+        Q3 = df[column].quantile(0.75)
+        IQR = Q3 - Q1
+        lower_bound = Q1 - factor * IQR
+        upper_bound = Q3 + factor * IQR
+    else:
+        # Nếu muốn dùng std-based
+        mean_val = df[column].mean()
+        std_val = df[column].std()
+        lower_bound = mean_val - factor * std_val
+        upper_bound = mean_val + factor * std_val
+
+    # Tách ra 2 DataFrame: outlier và clean
+    df_outliers = df[(df[column] < lower_bound) | (df[column] > upper_bound)]
+    df_cleaned = df[(df[column] >= lower_bound) & (df[column] <= upper_bound)]
+
+    return df_cleaned, df_outliers
+
 def prepare_data():
     """
     Chuẩn bị dữ liệu cho dashboard:
@@ -89,16 +129,20 @@ def prepare_data():
       - Nếu có cột "Receipt Date", chuyển đổi sang kiểu datetime với dayfirst=True và infer_datetime_format=True.
       - Xử lý cột "Lot number" để tạo ra các cột phụ: warehouse_date, supplier_date, supplier_name.
       - Tạo cột 'final_date' thống nhất.
-      - Chuyển đổi cột "Actual result" sang kiểu số (numeric).
+      - Chuyển đổi "Actual result" sang dạng số (numeric).
+      - Loại bỏ outlier (nếu có) và trả về hai DataFrame: clean & outliers.
     """
     try:
         df = get_bigquery_data()
-        if df is None:
-            return None
+        if df is None or df.empty:
+            return None, None
 
-        # Chuyển đổi "Receipt Date" nếu có; điều chỉnh infer_datetime_format nếu định dạng khác
+        # Chuyển đổi "Receipt Date" nếu có
         if "Receipt Date" in df.columns:
-            df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True, infer_datetime_format=True)
+            df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], 
+                                                errors='coerce', 
+                                                dayfirst=True, 
+                                                infer_datetime_format=True)
 
         # Xử lý "Lot number" để lấy thông tin bổ sung
         lot_info = df.apply(process_lot_dates, axis=1)
@@ -117,8 +161,11 @@ def prepare_data():
                 errors='coerce'
             )
 
-        return df
+        # Loại bỏ outlier (nếu cần)
+        df_cleaned, df_outliers = remove_outliers(df, column='Actual result', method='IQR', factor=1.5)
+
+        return df_cleaned, df_outliers
 
     except Exception as e:
         st.error(f"Error processing data: {str(e)}")
-        return None
+        return None, None
