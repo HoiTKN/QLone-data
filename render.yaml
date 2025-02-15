@@ -1,0 +1,12 @@
+# render.yaml
+services:
+  - type: web
+    name: qlone-dashboard
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: GOOGLE_CREDENTIALS
+        sync: false
+      - key: GOOGLE_BIGQUERY_TABLE
+        sync: false
