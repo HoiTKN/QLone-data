@@ -12,3 +12,5 @@ dash-core-components
 dash-html-components
 dash-bootstrap-components
 plotly
+google-cloud-bigquery
+# ... các thư viện khác bạn dùng
