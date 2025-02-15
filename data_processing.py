@@ -1,3 +1,5 @@
+import os
+import json
 import pandas as pd
 import numpy as np
 import streamlit as st
@@ -5,19 +7,27 @@ from google.cloud import bigquery
 
 def get_bigquery_data():
     """
-    Kết nối đến BigQuery sử dụng thông tin từ st.secrets và trả về DataFrame.
-    Yêu cầu st.secrets phải chứa:
-      - [gcp_service_account]: Thông tin xác thực của Service Account.
-      - [GOOGLE_BIGQUERY]: Chứa key "table" với giá trị là tên bảng đầy đủ (project.dataset.table).
-    Chỉ lấy các cột cần thiết nhằm giảm kích thước dữ liệu:
+    Kết nối đến BigQuery sử dụng thông tin từ st.secrets (nếu có) hoặc từ biến môi trường.
+    Yêu cầu:
+      - Nếu sử dụng Streamlit Cloud: st.secrets["gcp_service_account"] và st.secrets["GOOGLE_BIGQUERY"]["table"]
+      - Nếu không có st.secrets (ví dụ chạy trên Hugging Face Spaces): đọc từ biến môi trường:
+            GCP_SERVICE_ACCOUNT (JSON string)
+            GOOGLE_BIGQUERY_TABLE (tên bảng)
+    Chỉ lấy các cột cần thiết:
       - Receipt Date, Sample Name, Sample Type, Lot number, Sample ID,
         Test description, Actual result, Inspec, Lower limit, Upper limit,
         Category description, Spec description, Spec category, Spec.
     """
     try:
-        credentials_info = st.secrets["gcp_service_account"]
+        if "gcp_service_account" in st.secrets:
+            credentials_info = st.secrets["gcp_service_account"]
+            table = st.secrets["GOOGLE_BIGQUERY"]["table"]
+        else:
+            credentials_json = os.getenv("GCP_SERVICE_ACCOUNT", "{}")
+            credentials_info = json.loads(credentials_json)
+            table = os.getenv("GOOGLE_BIGQUERY_TABLE", "project.dataset.table")
+
         client = bigquery.Client.from_service_account_info(credentials_info)
-        table = st.secrets["GOOGLE_BIGQUERY"]["table"]
         
         query = f"""
             SELECT 
@@ -34,7 +44,8 @@ def get_bigquery_data():
                 `Category description`,
                 `Spec description`,
                 `Spec category`,
-                Spec
+                Spec,
+                `Charge department`
             FROM `{table}`
         """
         df = client.query(query).to_dataframe()
@@ -62,8 +73,7 @@ def process_lot_dates(row):
     """
     Tách thông tin từ cột 'Lot number' để lấy ra:
       - warehouse_date: ngày kho (ví dụ: '02/01/2025' trong RM/PG)
-      - supplier_date: ngày của nhà cung cấp (ví dụ: '29/12/2024' trong RM/PG, 
-        hoặc chỉ có một ngày cho IP/FG/GHP)
+      - supplier_date: ngày của nhà cung cấp (ví dụ: '29/12/2024' trong RM/PG, hoặc chỉ có một ngày cho IP/FG/GHP)
       - supplier_name: tên nhà cung cấp (nếu có, ví dụ: 'KIB08' nếu khác 'MBP')
     """
     lot_number = str(row.get('Lot number', '')).strip()
@@ -73,7 +83,6 @@ def process_lot_dates(row):
     supplier_date = None
     supplier_name = None
 
-    # Nếu Sample Type thuộc RM/PG (hoặc Raw material, Packaging)
     if "rm" in sample_type or "raw material" in sample_type or "pg" in sample_type or "packaging" in sample_type:
         if len(parts) >= 1:
             warehouse_date = parse_ddmmyy(parts[0])
@@ -82,7 +91,6 @@ def process_lot_dates(row):
         if len(parts) >= 3:
             supplier_date = parse_ddmmyy(parts[2])
     else:
-        # Với các loại khác (IP, FG, GHP, ...)
         if len(parts) >= 1:
             supplier_date = parse_ddmmyy(parts[0])
     return pd.Series([warehouse_date, supplier_date, supplier_name])
@@ -115,7 +123,6 @@ def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
     if df is None or df.empty or column not in df.columns:
         return df, pd.DataFrame()
 
-    # Đảm bảo cột là numeric
     if not pd.api.types.is_numeric_dtype(df[column]):
         return df, pd.DataFrame()
 
@@ -139,7 +146,8 @@ def remove_outliers(df, column='Actual result', method='IQR', factor=1.5):
 def prepare_data():
     """
     Chuẩn bị dữ liệu cho dashboard:
-      - Lấy dữ liệu từ BigQuery (chỉ 14 cột cần thiết).
+      - Lấy dữ liệu từ BigQuery (chỉ 14 cột cần thiết + Charge department).
+      - Loại bỏ các dòng có Charge department là SHE.MBP và MFG.MBP.
       - Chuyển đổi "Receipt Date" sang datetime.
       - Xử lý "Lot number" để tạo cột phụ: warehouse_date, supplier_date, supplier_name.
       - Tạo cột 'final_date' thống nhất.
@@ -151,15 +159,19 @@ def prepare_data():
         if df is None or df.empty:
             return None, None
 
+        # Thêm bộ lọc: loại bỏ các dòng mà cột Charge department chứa SHE.MBP hoặc MFG.MBP
+        if "Charge department" in df.columns:
+            df = df[~df["Charge department"].isin(["SHE.MBP", "MFG.MBP"])]
+
         if "Receipt Date" in df.columns:
             df['Receipt Date'] = pd.to_datetime(df['Receipt Date'], errors='coerce', dayfirst=True)
-
+        
         lot_info = df.apply(process_lot_dates, axis=1)
         lot_info.columns = ['warehouse_date', 'supplier_date', 'supplier_name']
         df = pd.concat([df, lot_info], axis=1)
-
+        
         df["final_date"] = df.apply(unify_date, axis=1)
-
+        
         if "Actual result" in df.columns:
             df['Actual result'] = pd.to_numeric(
                 df['Actual result'].astype(str)
@@ -167,9 +179,8 @@ def prepare_data():
                   .str.extract(r'(\d+\.?\d*)')[0],
                 errors='coerce'
             )
-
+        
         df_cleaned, df_outliers = remove_outliers(df, column='Actual result', method='IQR', factor=1.5)
-
         return df_cleaned, df_outliers
 
     except Exception as e:
