@@ -9,11 +9,18 @@ st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
 @st.cache_data(ttl=3600)
 def load_data():
+    """
+    Gọi hàm prepare_data() để lấy 2 DataFrame:
+      - df: dữ liệu sạch (đã loại bỏ outliers)
+      - df_outliers: dữ liệu bị xem là outliers
+    """
     return prepare_data()
 
 # Tải dữ liệu
-df = load_data()
-if df is None:
+df, df_outliers = load_data()
+
+# Kiểm tra dữ liệu
+if df is None or df.empty:
     st.error("Unable to load data. Please check your configuration.")
     st.stop()
 
@@ -22,7 +29,7 @@ if "final_date" not in df.columns:
     st.error("Column 'final_date' does not exist. Check data_processing.py!")
     st.stop()
 
-# Debug: In thông tin về final_date
+# Debug/Confirm
 st.write("Data loaded successfully from BigQuery!")
 st.write("Min final_date:", df["final_date"].min())
 st.write("Max final_date:", df["final_date"].max())
@@ -33,7 +40,7 @@ def apply_multiselect_filter(df, col_name, label):
     Tạo multiselect filter cho cột col_name.
     Mặc định chọn tất cả giá trị để thân thiện với người dùng.
     """
-    if col_name not in df.columns:
+    if df is None or df.empty or col_name not in df.columns:
         return df
     all_vals = sorted(df[col_name].dropna().unique())
     selected_vals = st.multiselect(label, options=all_vals, default=all_vals)
@@ -48,41 +55,48 @@ def numeric_or_none(val):
 ###################### SIDEBAR FILTERS ######################
 st.sidebar.title("Filters")
 
+# Sao chép để filter
 filtered_df = df.copy()
+filtered_outliers = df_outliers.copy() if df_outliers is not None else pd.DataFrame()
 
-# Gom các filter vào 1 expander để gọn gàng
 with st.sidebar.expander("Filter Options", expanded=True):
-    filtered_df = apply_multiselect_filter(filtered_df, "Category description", "Category description")
-    filtered_df = apply_multiselect_filter(filtered_df, "Spec category", "Spec category")
-    filtered_df = apply_multiselect_filter(filtered_df, "Spec description", "Spec description")
-    filtered_df = apply_multiselect_filter(filtered_df, "Test description", "Test description")
-    filtered_df = apply_multiselect_filter(filtered_df, "Sample Type", "Sample Type")
+    # Lần lượt áp dụng filter multiselect cho cả df sạch và df outliers
+    for col in ["Category description", "Spec category", "Spec description", "Test description", "Sample Type"]:
+        filtered_df = apply_multiselect_filter(filtered_df, col, col)
+        if not filtered_outliers.empty:
+            filtered_outliers = apply_multiselect_filter(filtered_outliers, col, col)
 
-# Thống kê số dòng sau khi filter cột
 st.sidebar.markdown(f"**Total records after filtering**: {len(filtered_df)}")
 
 # -------------- DATE RANGE FILTER (final_date) --------------
 st.sidebar.markdown("---")
 st.sidebar.subheader("Date Range Filter (final_date)")
 
-# Lấy ra cột final_date dạng datetime
 available_dates = pd.to_datetime(filtered_df["final_date"], errors='coerce').dropna()
 if not available_dates.empty:
     min_date = available_dates.min().date()
     max_date = available_dates.max().date()
-    # Hiển thị cho người dùng biết khoảng thời gian có sẵn
     st.sidebar.write(f"Data range in dataset: {min_date} -> {max_date}")
 
-    # Tạo date_input với giá trị mặc định là (min_date, max_date)
     date_range = st.sidebar.date_input("Select Date Range", value=(min_date, max_date))
     if isinstance(date_range, (list, tuple)) and len(date_range) == 2:
         start_date, end_date = date_range
-        mask = (
+        # Filter cho df sạch
+        mask_filtered = (
             pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date >= start_date
         ) & (
             pd.to_datetime(filtered_df["final_date"], errors='coerce').dt.date <= end_date
         )
-        filtered_df = filtered_df[mask]
+        filtered_df = filtered_df[mask_filtered]
+
+        # Filter cho df outliers
+        if not filtered_outliers.empty:
+            mask_outliers = (
+                pd.to_datetime(filtered_outliers["final_date"], errors='coerce').dt.date >= start_date
+            ) & (
+                pd.to_datetime(filtered_outliers["final_date"], errors='coerce').dt.date <= end_date
+            )
+            filtered_outliers = filtered_outliers[mask_outliers]
 else:
     st.sidebar.write("No valid final_date in the current filtered data.")
 
@@ -105,7 +119,6 @@ with tabs[0]:
         if ts_data.empty:
             st.warning("No data for the selected test.")
         else:
-            # Sắp xếp theo final_date
             ts_data.sort_values(by="final_date", inplace=True)
 
             fig_ts = go.Figure()
@@ -139,12 +152,18 @@ with tabs[0]:
                 yaxis_title="Actual Result",
                 showlegend=True
             )
-            # Chỉ lấy ngày (không giờ)
             fig_ts.update_xaxes(
                 type='date',
                 tickformat='%Y-%m-%d'
             )
             st.plotly_chart(fig_ts, use_container_width=True)
+
+            # Hiển thị outliers tương ứng với test này
+            ts_outliers = filtered_outliers[filtered_outliers["Test description"] == selected_test_ts].copy()
+            if not ts_outliers.empty:
+                st.subheader("Outliers for this test (excluded from chart)")
+                st.write("These are data points considered outliers by the IQR method.")
+                st.dataframe(ts_outliers[["final_date","Actual result","Lot number"]].sort_values("final_date"))
 
 # ================= TAB 2: SPC CHART ================= #
 with tabs[1]:
@@ -172,8 +191,9 @@ with tabs[1]:
                 name="Actual Result"
             ))
 
-            lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns else None
-            usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns else None
+            # Đọc LSL và USL
+            lsl_val = numeric_or_none(spc_data["Lower limit"].iloc[0]) if "Lower limit" in spc_data.columns and not spc_data.empty else None
+            usl_val = numeric_or_none(spc_data["Upper limit"].iloc[0]) if "Upper limit" in spc_data.columns and not spc_data.empty else None
 
             if lsl_val is not None:
                 fig_spc.add_hline(y=lsl_val, line_dash="dash", line_color="red", annotation_text="LSL")
