@@ -4,7 +4,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from data_processing import prepare_data
-
+from scipy.stats import norm
 # Đặt cấu hình trang
 st.set_page_config(page_title="Quality Control Dashboard", layout="wide")
 
