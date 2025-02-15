@@ -59,10 +59,10 @@ st.sidebar.title("Filters")
 filtered_df = df.copy()
 filtered_outliers = df_outliers.copy() if df_outliers is not None else pd.DataFrame()
 
-for col, label in [("Category description", "Category description"),
-                   ("Sample Type", "Sample Type"),
-                   ("Spec description", "Spec description"),
-                   ("Test description", "Test description")]:
+for col, label in [("Category description"),
+                   ("Sample Type"),
+                   ("Spec description"),
+                   ("Test description")]:
     filtered_df = sidebar_multiselect_filter(filtered_df, col, label)
     if not filtered_outliers.empty:
         filtered_outliers = sidebar_multiselect_filter(filtered_outliers, col, label)
